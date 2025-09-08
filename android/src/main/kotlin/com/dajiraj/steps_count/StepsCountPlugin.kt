@@ -1,34 +1,149 @@
 package com.dajiraj.steps_count
 
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import androidx.core.app.ActivityCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 
 /** StepsCountPlugin */
-class StepsCountPlugin :
-    FlutterPlugin,
-    MethodCallHandler {
-    // The MethodChannel that will the communication between Flutter and native Android
-    //
-    // This local reference serves to register the plugin with the Flutter Engine and unregister it
-    // when the Flutter Engine is detached from the Activity
+class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
+
     private lateinit var channel: MethodChannel
+    private var context: Context? = null
+    private var activity: android.app.Activity? = null
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "steps_count")
         channel.setMethodCallHandler(this)
+        context = flutterPluginBinding.applicationContext
     }
 
-    override fun onMethodCall(
-        call: MethodCall,
-        result: Result
-    ) {
-        if (call.method == "getPlatformVersion") {
-            result.success("Android ${android.os.Build.VERSION.RELEASE}")
-        } else {
-            result.notImplemented()
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
+
+    override fun onDetachedFromActivity() {
+        activity = null
+    }
+
+    override fun onDetachedFromActivityForConfigChanges() {
+        activity = null
+    }
+
+    override fun onMethodCall(call: MethodCall, result: Result) {
+        when (call.method) {
+            "startBackgroundService" -> startBackgroundService(result)
+            "forceStopBackgroundService" -> forceStopBackgroundService(result)
+            "isServiceRunning" -> isServiceRunning(result)
+            "checkPermission" -> checkPermission(result)
+            "requestPermission" -> requestPermission(result)
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun startBackgroundService(result: Result) {
+        try {
+            val context = this.context ?: run {
+                result.error("CONTEXT_ERROR", "Context not available", null)
+                return
+            }
+
+            // Check if service is already running
+            if (BackgroundServiceManager.isServiceRunning()) {
+                result.success(true)
+                return
+            }
+
+            // Check permissions
+            val hasPermission = PermissionManager.checkRequiredPermissions(context)
+            if (!hasPermission) {
+                result.error("PERMISSION_ERROR", "Required permissions not granted", null)
+                return
+            }
+
+            // Start the service
+            val serviceIntent = Intent(context, BackgroundServiceManager::class.java).apply {
+                action = "START_SERVICE"
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("SERVICE_ERROR", "Failed to start service: ${e.message}", null)
+        }
+    }
+
+    private fun forceStopBackgroundService(result: Result) {
+        try {
+            val context = this.context ?: run {
+                result.error("CONTEXT_ERROR", "Context not available", null)
+                return
+            }
+
+            // Force stop the service
+            BackgroundServiceManager.forceStopService(context)
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("SERVICE_ERROR", "Failed to force stop service: ${e.message}", null)
+        }
+    }
+
+    private fun isServiceRunning(result: Result) {
+        try {
+            val isRunning = BackgroundServiceManager.isServiceRunning()
+            result.success(isRunning)
+        } catch (e: Exception) {
+            result.error("SERVICE_STATUS_ERROR", "Failed to get service status: ${e.message}", null)
+        }
+    }
+
+    private fun checkPermission(result: Result) {
+        try {
+            val context = this.context ?: run {
+                result.error("CONTEXT_ERROR", "Context not available", null)
+                return
+            }
+            val hasPermission = PermissionManager.checkRequiredPermissions(context)
+            result.success(hasPermission)
+        } catch (e: Exception) {
+            result.error("PERMISSION_ERROR", "Failed to check permission: ${e.message}", null)
+        }
+    }
+
+    private fun requestPermission(result: Result) {
+        try {
+            val activity = this.activity ?: run {
+                result.error("ACTIVITY_ERROR", "Activity not available", null)
+                return
+            }
+            val context = this.context ?: run {
+                result.error("CONTEXT_ERROR", "Context not available", null)
+                return
+            }
+
+            val hasPermission = PermissionManager.checkRequiredPermissions(context)
+            if (!hasPermission) {
+                PermissionManager.requestPermissions(activity)
+            }
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("PERMISSION_ERROR", "Failed to request permission: ${e.message}", null)
         }
     }
 

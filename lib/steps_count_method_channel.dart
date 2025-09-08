@@ -10,8 +10,42 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   final methodChannel = const MethodChannel('steps_count');
 
   @override
-  Future<String?> getPlatformVersion() async {
-    final version = await methodChannel.invokeMethod<String>('getPlatformVersion');
-    return version;
+  Future<bool> startBackgroundService() async {
+    final result = await methodChannel.invokeMethod<bool>(
+      'startBackgroundService',
+    );
+    return result ?? false;
+  }
+
+  @override
+  Future<bool> forceStopBackgroundService() async {
+    final result = await methodChannel.invokeMethod<bool>(
+      'forceStopBackgroundService',
+    );
+    return result ?? false;
+  }
+
+  @override
+  Future<int> getStepCount() async {
+    final result = await methodChannel.invokeMethod<int>('getStepCount');
+    return result ?? 0;
+  }
+
+  @override
+  Future<bool> isServiceRunning() async {
+    final result = await methodChannel.invokeMethod<bool>('isServiceRunning');
+    return result ?? false;
+  }
+
+  @override
+  Future<bool> checkPermission() async {
+    final result = await methodChannel.invokeMethod<bool>('checkPermission');
+    return result ?? false;
+  }
+
+  @override
+  Future<bool> requestPermission() async {
+    final result = await methodChannel.invokeMethod<bool>('requestPermission');
+    return result ?? false;
   }
 }
