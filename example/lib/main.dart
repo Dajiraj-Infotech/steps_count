@@ -69,13 +69,12 @@ class _MyAppState extends State<MyApp> {
         }
       }
     } catch (e) {
-      if (mounted) {
-        _showSnackBar('Error requesting permission: $e', Colors.red);
-      }
+      _showSnackBar('Error requesting permission: $e', Colors.red);
     }
   }
 
   void _showSnackBar(String message, Color color) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
