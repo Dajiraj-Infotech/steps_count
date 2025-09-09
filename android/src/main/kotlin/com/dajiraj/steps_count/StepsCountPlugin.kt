@@ -43,7 +43,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
             "startBackgroundService" -> startBackgroundService(result)
-            "forceStopBackgroundService" -> forceStopBackgroundService(result)
+            "stopBackgroundService" -> stopBackgroundService(result)
             "isServiceRunning" -> isServiceRunning(result)
             else -> result.notImplemented()
         }
@@ -79,7 +79,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
-    private fun forceStopBackgroundService(result: Result) {
+    private fun stopBackgroundService(result: Result) {
         try {
             val context = this.context ?: run {
                 result.error("CONTEXT_ERROR", "Context not available", null)
@@ -87,7 +87,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             }
 
             // Force stop the service
-            BackgroundServiceManager.forceStopService(context)
+            BackgroundServiceManager.stopBackgroundService(context)
             result.success(true)
         } catch (e: Exception) {
             result.error("SERVICE_ERROR", "Failed to force stop service: ${e.message}", null)

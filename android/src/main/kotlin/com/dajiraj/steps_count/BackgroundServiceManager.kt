@@ -30,7 +30,7 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         // Public methods
         fun isServiceRunning(): Boolean = isRunning
 
-        fun forceStopService(context: Context) {
+        fun stopBackgroundService(context: Context) {
             isForceStopped = true
             val intent = Intent(context, BackgroundServiceManager::class.java).apply {
                 action = "FORCE_STOP"

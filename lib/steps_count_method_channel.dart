@@ -10,30 +10,18 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   final methodChannel = const MethodChannel('steps_count');
 
   @override
-  Future<bool> startBackgroundService() async {
-    final result = await methodChannel.invokeMethod<bool>(
-      'startBackgroundService',
-    );
-    return result ?? false;
+  Future<void> startBackgroundService() async {
+    await methodChannel.invokeMethod('startBackgroundService');
   }
 
   @override
-  Future<bool> forceStopBackgroundService() async {
-    final result = await methodChannel.invokeMethod<bool>(
-      'forceStopBackgroundService',
-    );
-    return result ?? false;
+  Future<void> stopBackgroundService() async {
+    await methodChannel.invokeMethod('stopBackgroundService');
   }
 
   @override
   Future<int> getStepCount() async {
     final result = await methodChannel.invokeMethod<int>('getStepCount');
     return result ?? 0;
-  }
-
-  @override
-  Future<bool> isServiceRunning() async {
-    final result = await methodChannel.invokeMethod<bool>('isServiceRunning');
-    return result ?? false;
   }
 }

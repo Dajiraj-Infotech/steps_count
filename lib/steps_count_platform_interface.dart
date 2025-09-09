@@ -23,23 +23,19 @@ abstract class StepsCountPlatform extends PlatformInterface {
     _instance = instance;
   }
 
-  Future<bool> startBackgroundService() {
+  Future<void> startBackgroundService() {
     throw UnimplementedError(
       'startBackgroundService() has not been implemented.',
     );
   }
 
-  Future<bool> forceStopBackgroundService() {
+  Future<void> stopBackgroundService() {
     throw UnimplementedError(
-      'forceStopBackgroundService() has not been implemented.',
+      'stopBackgroundService() has not been implemented.',
     );
   }
 
   Future<int> getStepCount() {
     throw UnimplementedError('getStepCount() has not been implemented.');
-  }
-
-  Future<bool> isServiceRunning() {
-    throw UnimplementedError('isServiceRunning() has not been implemented.');
   }
 }
