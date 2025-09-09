@@ -17,12 +17,4 @@ class StepsCount {
   Future<bool> isServiceRunning() {
     return StepsCountPlatform.instance.isServiceRunning();
   }
-
-  Future<bool> checkPermission() {
-    return StepsCountPlatform.instance.checkPermission();
-  }
-
-  Future<bool> requestPermission() {
-    return StepsCountPlatform.instance.requestPermission();
-  }
 }

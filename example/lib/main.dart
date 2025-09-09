@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:steps_count/steps_count.dart';
 
 void main() {
@@ -39,49 +40,45 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _checkPermissionStatus() async {
-    try {
-      final hasPermission = await _stepsCounterPlugin.checkPermission();
-      if (mounted) {
-        setState(() {
-          _hasPermission = hasPermission;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _hasPermission = false;
-        });
-      }
+    final activityRecognitionStatus =
+        await Permission.activityRecognition.status;
+    final notificationStatus = await Permission.notification.status;
+    if (activityRecognitionStatus.isGranted && notificationStatus.isGranted) {
+      _hasPermission = true;
+    } else {
+      _hasPermission = false;
     }
+    setState(() {});
   }
 
   Future<void> _requestPermission() async {
+    if (_hasPermission) {
+      debugPrint('Permission already granted');
+      return;
+    }
     try {
-      final result = await _stepsCounterPlugin.requestPermission();
-      if (mounted) {
-        setState(() {
-          _hasPermission = result;
-        });
-        if (result) {
-          _showSnackBar('Permission granted!', Colors.green);
-        } else {
-          _showSnackBar('Permission denied', Colors.red);
-        }
+      final activityRecognitionStatus = await Permission.activityRecognition
+          .request();
+      final notificationStatus = await Permission.notification.request();
+      if (activityRecognitionStatus.isPermanentlyDenied ||
+          notificationStatus.isPermanentlyDenied) {
+        debugPrint('Permission permanently denied');
+        await openAppSettings();
+        _requestPermission();
+        return;
+      }
+      await _checkPermissionStatus();
+      if (activityRecognitionStatus.isGranted && notificationStatus.isGranted) {
+        _hasPermission = true;
+        debugPrint('Permission granted!');
+      } else {
+        _hasPermission = false;
+        debugPrint('Permission denied');
       }
     } catch (e) {
-      _showSnackBar('Error requesting permission: $e', Colors.red);
+      debugPrint('Error requesting permission: $e');
     }
-  }
-
-  void _showSnackBar(String message, Color color) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: color,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    setState(() {});
   }
 
   Future<void> _checkServiceStatus() async {
@@ -119,7 +116,7 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _startService() async {
     if (!_hasPermission) {
-      _showSnackBar('Please grant permission first', Colors.orange);
+      debugPrint('Please grant permission first');
       return;
     }
 
@@ -276,21 +273,6 @@ class _MyAppState extends State<MyApp> {
                       ),
                     ),
                   ),
-                if (_hasPermission)
-                  ElevatedButton.icon(
-                    onPressed: _checkPermissionStatus,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Refresh Permission'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 12,
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 20),
                 // Service Status
                 Text(
                   'Service Status:',

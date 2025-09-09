@@ -42,12 +42,4 @@ abstract class StepsCountPlatform extends PlatformInterface {
   Future<bool> isServiceRunning() {
     throw UnimplementedError('isServiceRunning() has not been implemented.');
   }
-
-  Future<bool> checkPermission() {
-    throw UnimplementedError('checkPermission() has not been implemented.');
-  }
-
-  Future<bool> requestPermission() {
-    throw UnimplementedError('requestPermission() has not been implemented.');
-  }
 }

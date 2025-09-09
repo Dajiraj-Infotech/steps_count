@@ -36,16 +36,4 @@ class MethodChannelStepsCount extends StepsCountPlatform {
     final result = await methodChannel.invokeMethod<bool>('isServiceRunning');
     return result ?? false;
   }
-
-  @override
-  Future<bool> checkPermission() async {
-    final result = await methodChannel.invokeMethod<bool>('checkPermission');
-    return result ?? false;
-  }
-
-  @override
-  Future<bool> requestPermission() async {
-    final result = await methodChannel.invokeMethod<bool>('requestPermission');
-    return result ?? false;
-  }
 }

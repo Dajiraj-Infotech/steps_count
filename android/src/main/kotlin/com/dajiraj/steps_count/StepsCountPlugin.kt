@@ -3,7 +3,6 @@ package com.dajiraj.steps_count
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import androidx.core.app.ActivityCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -46,8 +45,6 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "startBackgroundService" -> startBackgroundService(result)
             "forceStopBackgroundService" -> forceStopBackgroundService(result)
             "isServiceRunning" -> isServiceRunning(result)
-            "checkPermission" -> checkPermission(result)
-            "requestPermission" -> requestPermission(result)
             else -> result.notImplemented()
         }
     }
@@ -62,13 +59,6 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             // Check if service is already running
             if (BackgroundServiceManager.isServiceRunning()) {
                 result.success(true)
-                return
-            }
-
-            // Check permissions
-            val hasPermission = PermissionManager.checkRequiredPermissions(context)
-            if (!hasPermission) {
-                result.error("PERMISSION_ERROR", "Required permissions not granted", null)
                 return
             }
 
@@ -110,40 +100,6 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             result.success(isRunning)
         } catch (e: Exception) {
             result.error("SERVICE_STATUS_ERROR", "Failed to get service status: ${e.message}", null)
-        }
-    }
-
-    private fun checkPermission(result: Result) {
-        try {
-            val context = this.context ?: run {
-                result.error("CONTEXT_ERROR", "Context not available", null)
-                return
-            }
-            val hasPermission = PermissionManager.checkRequiredPermissions(context)
-            result.success(hasPermission)
-        } catch (e: Exception) {
-            result.error("PERMISSION_ERROR", "Failed to check permission: ${e.message}", null)
-        }
-    }
-
-    private fun requestPermission(result: Result) {
-        try {
-            val activity = this.activity ?: run {
-                result.error("ACTIVITY_ERROR", "Activity not available", null)
-                return
-            }
-            val context = this.context ?: run {
-                result.error("CONTEXT_ERROR", "Context not available", null)
-                return
-            }
-
-            val hasPermission = PermissionManager.checkRequiredPermissions(context)
-            if (!hasPermission) {
-                PermissionManager.requestPermissions(activity)
-            }
-            result.success(true)
-        } catch (e: Exception) {
-            result.error("PERMISSION_ERROR", "Failed to request permission: ${e.message}", null)
         }
     }
 
