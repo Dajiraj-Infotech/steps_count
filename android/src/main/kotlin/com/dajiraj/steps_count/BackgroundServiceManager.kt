@@ -37,12 +37,23 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             }
             context.startService(intent)
         }
+
+        fun getStepCount(startDate: Long? = null, endDate: Long? = null): Int {
+            return serviceInstance?.let { service ->
+                if (service::stepCountManager.isInitialized) {
+                    service.stepCountManager.getStepCount(startDate, endDate)
+                } else {
+                    0
+                }
+            } ?: 0
+        }
     }
 
     private lateinit var sensorManager: SensorManager
     private var stepCounterSensor: Sensor? = null
     private lateinit var serviceScope: CoroutineScope
     private var wakeLock: PowerManager.WakeLock? = null
+    private lateinit var stepCountManager: StepCountManager
 
     override fun onCreate() {
         super.onCreate()
@@ -50,6 +61,7 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         createNotificationChannel()
         initializeSensors()
         initializeWakeLock()
+        initializeStepManager()
         serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     }
 
@@ -112,6 +124,15 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         }
     }
 
+    private fun initializeStepManager() {
+        try {
+            stepCountManager = StepCountManager(this)
+            Log.d(TAG, "Step count manager initialized")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize step count manager: ${e.message}")
+        }
+    }
+
     private fun startService() {
         if (isRunning) return
         isRunning = true
@@ -134,6 +155,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     private fun stopService() {
         isRunning = false
         serviceInstance = null
+
+        // Flush pending steps before stopping
+        if (::stepCountManager.isInitialized) {
+            stepCountManager.flushPendingSteps()
+        }
 
         // Release wake lock
         releaseWakeLock()
@@ -231,9 +257,16 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Get current step count for notification
+        val currentSteps = if (::stepCountManager.isInitialized) {
+            stepCountManager.getCurrentSessionSteps()
+        } else {
+            0
+        }
+
         return NotificationCompat.Builder(
             this, CHANNEL_ID
-        ).setContentTitle("Steps Counter").setContentText("Counting steps: 0")
+        ).setContentTitle("Steps Counter").setContentText("Session steps: $currentSteps")
             .setSmallIcon(android.R.drawable.ic_dialog_info).setContentIntent(pendingIntent)
             .setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
@@ -294,11 +327,10 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent?) {
         event?.let { sensorEvent ->
-            if (sensorEvent.sensor.type == Sensor.TYPE_STEP_COUNTER) {
-                // Step Count Logic
-                Log.d(
-                    TAG, "Step count updated: "
-                )
+            if (sensorEvent.sensor.type == Sensor.TYPE_STEP_COUNTER && ::stepCountManager.isInitialized) {
+                val sensorValue = sensorEvent.values[0]
+                stepCountManager.onSensorChanged(sensorValue)
+                Log.d(TAG, "Step sensor value: $sensorValue")
             }
         }
     }
@@ -323,6 +355,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
         isRunning = false
         serviceInstance = null
+
+        // Cleanup step manager
+        if (::stepCountManager.isInitialized) {
+            stepCountManager.cleanup()
+        }
 
         // Release wake lock
         releaseWakeLock()
@@ -368,20 +405,59 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
             val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
 
-            // Use setExactAndAllowWhileIdle for better reliability on modern Android
-            alarmManager.setExactAndAllowWhileIdle(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                SystemClock.elapsedRealtime() + delayMs,
-                pendingIntent
-            )
-
-            Log.d(
-                TAG, "Service restart scheduled in ${delayMs}ms"
-            )
+            // Check if we can use exact alarms (Android 12+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (alarmManager.canScheduleExactAlarms()) {
+                    // Use exact alarm if permission is available
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + delayMs,
+                        pendingIntent
+                    )
+                    Log.d(TAG, "Service restart scheduled with exact alarm in ${delayMs}ms")
+                } else {
+                    // Fallback to inexact alarm
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + delayMs,
+                        pendingIntent
+                    )
+                    Log.w(TAG, "Exact alarm permission not available, using inexact alarm")
+                }
+            } else {
+                // For older Android versions, use exact alarm directly
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime() + delayMs,
+                    pendingIntent
+                )
+                Log.d(TAG, "Service restart scheduled with exact alarm in ${delayMs}ms")
+            }
         } catch (e: Exception) {
-            Log.e(
-                TAG, "Failed to schedule service restart: ${e.message}"
-            )
+            Log.e(TAG, "Failed to schedule service restart: ${e.message}")
+
+            // Try fallback with inexact alarm
+            try {
+                val restartIntent =
+                    Intent(applicationContext, BackgroundServiceManager::class.java).apply {
+                        action = "START_SERVICE"
+                    }
+                val pendingIntent = PendingIntent.getService(
+                    applicationContext,
+                    1,
+                    restartIntent,
+                    PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime() + 3000L,
+                    pendingIntent
+                )
+                Log.d(TAG, "Fallback inexact alarm scheduled successfully")
+            } catch (fallbackException: Exception) {
+                Log.e(TAG, "Failed to schedule fallback alarm: ${fallbackException.message}")
+            }
         }
     }
 }

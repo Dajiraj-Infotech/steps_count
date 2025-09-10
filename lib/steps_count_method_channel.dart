@@ -20,8 +20,21 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   }
 
   @override
-  Future<int> getStepCount() async {
-    final result = await methodChannel.invokeMethod<int>('getStepCount');
+  Future<int> getStepCount({DateTime? startDate, DateTime? endDate}) async {
+    final Map<String, dynamic> arguments = {};
+    
+    if (startDate != null) {
+      arguments['startDate'] = startDate.millisecondsSinceEpoch;
+    }
+    
+    if (endDate != null) {
+      arguments['endDate'] = endDate.millisecondsSinceEpoch;
+    }
+    
+    final result = await methodChannel.invokeMethod<int>(
+      'getStepCount', 
+      arguments.isEmpty ? null : arguments
+    );
     return result ?? 0;
   }
 

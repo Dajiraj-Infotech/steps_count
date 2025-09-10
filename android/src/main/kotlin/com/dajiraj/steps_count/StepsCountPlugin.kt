@@ -21,6 +21,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "steps_count")
         channel.setMethodCallHandler(this)
+        StepCountManager.stepCountChannel = channel
         context = flutterPluginBinding.applicationContext
     }
 
@@ -45,6 +46,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "startBackgroundService" -> startBackgroundService(result)
             "stopBackgroundService" -> stopBackgroundService(result)
             "isServiceRunning" -> isServiceRunning(result)
+            "getStepCount" -> getStepCount(call, result)
             else -> result.notImplemented()
         }
     }
@@ -100,6 +102,20 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             result.success(isRunning)
         } catch (e: Exception) {
             result.error("SERVICE_STATUS_ERROR", "Failed to get service status: ${e.message}", null)
+        }
+    }
+
+    private fun getStepCount(call: MethodCall, result: Result) {
+        try {
+            // Extract date parameters if provided
+            val startDate = call.argument<Long>("startDate")
+            val endDate = call.argument<Long>("endDate")
+
+            // Get step count from service
+            val stepCount = BackgroundServiceManager.getStepCount(startDate, endDate)
+            result.success(stepCount)
+        } catch (e: Exception) {
+            result.error("STEP_COUNT_ERROR", "Failed to get step count: ${e.message}", null)
         }
     }
 
