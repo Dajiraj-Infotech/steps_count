@@ -12,13 +12,27 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _stepCount = 0;
+  bool _isInitialized = false;
   bool _hasPermission = false;
+  bool _isServiceRunning = false;
   final _stepsCounterPlugin = StepsCount();
 
   @override
   void initState() {
     super.initState();
-    _checkPermissionStatus();
+    _checkAllStatus();
+  }
+
+  Future<void> _checkAllStatus() async {
+    await _checkPermissionStatus();
+    await _checkServiceStatus();
+    _isInitialized = true;
+    setState(() {});
+  }
+
+  Future<void> _checkServiceStatus() async {
+    _isServiceRunning = await _stepsCounterPlugin.isServiceRunning();
+    setState(() {});
   }
 
   Future<void> _checkPermissionStatus() async {
@@ -86,6 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _stepsCounterPlugin.startBackgroundService();
       showSnackBar('Service started');
       _updateStepCount();
+      _checkServiceStatus();
     } on PlatformException catch (e) {
       showSnackBar('Error starting service: ${e.message}', color: Colors.red);
       debugPrint('Error starting service: ${e.message}');
@@ -100,6 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await _stepsCounterPlugin.stopBackgroundService();
       showSnackBar('Service stopped');
+      _checkServiceStatus();
     } on PlatformException catch (e) {
       showSnackBar('Error stopping service: ${e.message}', color: Colors.red);
       debugPrint('Error stopping service: ${e.message}');
@@ -116,21 +132,29 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Steps Count')),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildCountContainer(),
+      body: _isInitialized ? _buildBody() : _buildLoading(),
+    );
+  }
+
+  Widget _buildLoading() {
+    return const Center(child: CircularProgressIndicator());
+  }
+
+  Widget _buildBody() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildCountContainer(),
+            const SizedBox(height: 30),
+            if (!_hasPermission) ...[
+              _buildPermissionBtn(),
               const SizedBox(height: 30),
-              if (!_hasPermission) ...[
-                _buildPermissionBtn(),
-                const SizedBox(height: 30),
-              ],
-              _buildServiceRequestBtn(),
             ],
-          ),
+            _buildServiceRequestBtn(),
+          ],
         ),
       ),
     );
@@ -182,7 +206,7 @@ class _HomeScreenState extends State<HomeScreen> {
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         ElevatedButton.icon(
-          onPressed: _startService,
+          onPressed: _isServiceRunning ? null : _startService,
           icon: const Icon(Icons.play_arrow),
           label: const Text('Start Service'),
           style: ElevatedButton.styleFrom(
@@ -192,7 +216,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         ElevatedButton.icon(
-          onPressed: _stopService,
+          onPressed: _isServiceRunning ? _stopService : null,
           icon: const Icon(Icons.stop),
           label: const Text('Stop Service'),
           style: ElevatedButton.styleFrom(

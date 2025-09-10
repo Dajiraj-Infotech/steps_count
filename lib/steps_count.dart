@@ -1,4 +1,3 @@
-
 import 'steps_count_platform_interface.dart';
 
 class StepsCount {
@@ -12,5 +11,9 @@ class StepsCount {
 
   Future<int> getStepCount() {
     return StepsCountPlatform.instance.getStepCount();
+  }
+
+  Future<bool> isServiceRunning() {
+    return StepsCountPlatform.instance.isServiceRunning();
   }
 }

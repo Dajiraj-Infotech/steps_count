@@ -38,4 +38,8 @@ abstract class StepsCountPlatform extends PlatformInterface {
   Future<int> getStepCount() {
     throw UnimplementedError('getStepCount() has not been implemented.');
   }
+
+  Future<bool> isServiceRunning() {
+    throw UnimplementedError('isServiceRunning() has not been implemented.');
+  }
 }
