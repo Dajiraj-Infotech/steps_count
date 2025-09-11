@@ -192,10 +192,18 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     }
 
     private fun createNotification(): Notification {
-        val intent = Intent(this, BackgroundServiceManager::class.java)
-        val pendingIntent = PendingIntent.getService(
-            this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        // Create intent to open the main Flutter activity
+        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = if (intent != null) {
+            PendingIntent.getActivity(
+                this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        } else {
+            null
+        }
 
         // Get today's step count for notification
         val todaysSteps = if (::stepCountManager.isInitialized) {
@@ -207,8 +215,9 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         return NotificationCompat.Builder(
             this, CHANNEL_ID
         ).setContentTitle("Steps Count").setContentText("Today's Steps: $todaysSteps")
-            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentIntent(pendingIntent)
-            .setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW)
+            .setSmallIcon(android.R.drawable.ic_dialog_info).apply {
+                pendingIntent?.let { setContentIntent(it) }
+            }.setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
     }
 
