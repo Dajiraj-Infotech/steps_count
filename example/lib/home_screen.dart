@@ -11,7 +11,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _stepCount = 0;
   int _todayStepCount = 0;
   bool _isInitialized = false;
@@ -29,6 +29,12 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _stepsChannel.setMethodCallHandler(_methodHandler);
     _checkAllStatus();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    _checkServiceStatus();
   }
 
   Future<void> _methodHandler(MethodCall call) async {
