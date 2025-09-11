@@ -6,6 +6,11 @@ class AppUtils {
     return '${date.day}/${date.month}/${date.year}';
   }
 
+  /// Formats a TimeOfDay object to HH:MM format
+  static String formatTime(TimeOfDay time) {
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  }
+
   /// Shows a snackbar with the given message and optional color
   static void showSnackBar(
     BuildContext context,
@@ -37,14 +42,14 @@ class AppUtils {
       lastDate: lastDate ?? DateTime.now(),
     );
   }
-}
 
-extension DateTimeExtension on DateTime {
-  DateTime startOfDay() {
-    return DateTime.utc(year, month, day, 0, 0, 0, 0, 0);
-  }
-
-  DateTime endOfDay() {
-    return DateTime.utc(year, month, day, 23, 59, 59, 999, 999);
+  static Future<TimeOfDay?> selectTime({
+    required BuildContext context,
+    TimeOfDay? initialTime,
+  }) async {
+    return await showTimePicker(
+      context: context,
+      initialTime: initialTime ?? TimeOfDay.now(),
+    );
   }
 }

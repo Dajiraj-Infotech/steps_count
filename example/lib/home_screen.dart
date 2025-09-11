@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:steps_count/steps_count.dart';
 import 'package:steps_count_example/utils/app_utils.dart';
+import 'package:steps_count_example/widgets/date_time_selector.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -23,6 +24,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Date selection variables
   DateTime? _startDate;
   DateTime? _endDate;
+
+  // Time selection variables
+  TimeOfDay? _startTime;
+  TimeOfDay? _endTime;
 
   @override
   void initState() {
@@ -119,8 +124,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       // Today's step count
       final now = DateTime.now();
-      final todayStartDate = now.startOfDay();
-      final todayEndDate = now.endOfDay();
+      final todayStartDate = now;
+      final todayEndDate = now;
       _todayStepCount = await _stepsCounterPlugin.getStepCount(
         startDate: todayStartDate,
         endDate: todayEndDate,
@@ -136,8 +141,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _updateFilteredStepCount() async {
     try {
       // Filtered step count
-      final startDate = _startDate?.startOfDay();
-      final endDate = _endDate?.endOfDay();
+      DateTime? startDate = _startDate;
+      DateTime? endDate = _endDate;
+
+      // Apply time information if available
+      if (_startDate != null && _startTime != null) {
+        startDate = DateTime(
+          _startDate!.year,
+          _startDate!.month,
+          _startDate!.day,
+          _startTime!.hour,
+          _startTime!.minute,
+        );
+      }
+
+      if (_endDate != null && _endTime != null) {
+        endDate = DateTime(
+          _endDate!.year,
+          _endDate!.month,
+          _endDate!.day,
+          _endTime!.hour,
+          _endTime!.minute,
+        );
+      }
+
       _stepCount = await _stepsCounterPlugin.getStepCount(
         startDate: startDate,
         endDate: endDate,
@@ -200,38 +227,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _selectStartDate() async {
-    final picked = await AppUtils.selectDateTime(
-      context: context,
-      initialDate: _startDate ?? DateTime.now(),
-    );
-    if (picked != null && picked != _startDate) {
-      _startDate = picked;
-      if (_endDate != null && _endDate!.isBefore(picked)) {
-        _endDate = picked;
-      }
-      setState(() {});
-      _updateFilteredStepCount();
-    }
-  }
 
-  Future<void> _selectEndDate() async {
-    final picked = await AppUtils.selectDateTime(
-      context: context,
-      initialDate: _endDate ?? DateTime.now(),
-      firstDate: _startDate,
-      lastDate: DateTime.now(),
-    );
-    if (picked != null && picked != _endDate) {
-      setState(() => _endDate = picked);
-      _updateFilteredStepCount();
-    }
+  bool _isTimeAfter(TimeOfDay time1, TimeOfDay time2) {
+    final minutes1 = time1.hour * 60 + time1.minute;
+    final minutes2 = time2.hour * 60 + time2.minute;
+    return minutes1 < minutes2;
   }
 
   void _clearDateRange() {
     setState(() {
       _startDate = null;
       _endDate = null;
+      _startTime = null;
+      _endTime = null;
     });
     _updateTodayStepCount();
     _updateFilteredStepCount();
@@ -276,113 +284,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildDateSelectionSection() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.blue.shade50,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: Colors.blue.shade200, width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Date Range Selection',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.blue.shade800,
-                ),
-              ),
-              if (_startDate != null || _endDate != null)
-                TextButton(
-                  onPressed: _clearDateRange,
-                  child: const Text(
-                    'Clear date range',
-                    style: TextStyle(color: Colors.red),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 15),
-          Row(
-            children: [
-              Expanded(
-                child: _buildDateSelector(
-                  label: 'Start Date',
-                  date: _startDate,
-                  onTap: _selectStartDate,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildDateSelector(
-                  label: 'End Date',
-                  date: _endDate,
-                  onTap: _selectEndDate,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+    return DateTimeSelector(
+      startDate: _startDate,
+      endDate: _endDate,
+      startTime: _startTime,
+      endTime: _endTime,
+      onStartDateSelected: (date) {
+        setState(() {
+          _startDate = date;
+          if (_endDate != null && _endDate!.isBefore(date!)) {
+            _endDate = date;
+          }
+        });
+        _updateFilteredStepCount();
+      },
+      onEndDateSelected: (date) {
+        setState(() => _endDate = date);
+        _updateFilteredStepCount();
+      },
+      onStartTimeSelected: (time) {
+        setState(() {
+          _startTime = time;
+          if (_endTime != null && _isTimeAfter(_endTime!, time!)) {
+            _endTime = time;
+          }
+        });
+        _updateFilteredStepCount();
+      },
+      onEndTimeSelected: (time) {
+        setState(() => _endTime = time);
+        _updateFilteredStepCount();
+      },
+      onClearSelection: _clearDateRange,
     );
   }
 
-  Widget _buildDateSelector({
-    required String label,
-    required DateTime? date,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.blue.shade300),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.blue.shade700,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Icon(
-                  Icons.calendar_today,
-                  size: 16,
-                  color: Colors.blue.shade600,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    date != null ? AppUtils.formatDate(date) : 'Select date',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: date != null
-                          ? Colors.black87
-                          : Colors.grey.shade600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _buildTodayCountContainer() {
     return Container(
