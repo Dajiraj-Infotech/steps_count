@@ -41,6 +41,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _checkAllStatus() async {
     await _checkPermissionStatus();
+    await Future.delayed(const Duration(seconds: 1));
     await _checkServiceStatus();
     _updateTodayStepCount();
     _updateFilteredStepCount();
