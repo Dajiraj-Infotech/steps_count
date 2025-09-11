@@ -196,7 +196,7 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
         return NotificationCompat.Builder(
             this, CHANNEL_ID
-        ).setContentTitle("Step Counts").setContentText("Steps: $currentSteps")
+        ).setContentTitle("Steps Count").setContentText("Steps: $currentSteps")
             .setSmallIcon(android.R.drawable.ic_dialog_info).setContentIntent(pendingIntent)
             .setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
