@@ -19,6 +19,8 @@ class StepCountManager(context: Context) {
         private const val KEY_LAST_SENSOR_VALUE = "last_sensor_value"
         private const val KEY_SESSION_STEPS = "session_steps"
         private const val KEY_PENDING_STEPS = "pending_steps"
+        private const val KEY_TODAYS_COUNT = "todays_count"
+        private const val KEY_TODAYS_DATE = "todays_date"
         private const val STEPS_BATCH_SIZE = 10
 
         var stepCountChannel: MethodChannel? = null
@@ -33,6 +35,8 @@ class StepCountManager(context: Context) {
     private var lastSensorValue: Float = 0f
     private var sessionSteps: Int = 0
     private var pendingSteps: Int = 0
+    private var todaysCount: Int = 0
+    private var todaysDate: String = ""
     private var isInitialized = false
 
     init {
@@ -46,10 +50,20 @@ class StepCountManager(context: Context) {
         lastSensorValue = prefs.getFloat(KEY_LAST_SENSOR_VALUE, 0f)
         sessionSteps = prefs.getInt(KEY_SESSION_STEPS, 0)
         pendingSteps = prefs.getInt(KEY_PENDING_STEPS, 0)
+        todaysCount = prefs.getInt(KEY_TODAYS_COUNT, 0)
+        todaysDate = prefs.getString(KEY_TODAYS_DATE, "") ?: ""
+
+        // Check if it's a new day and reset today's count if needed
+        val currentDate = TimeStampUtils.getTodaysDate()
+        if (todaysDate != currentDate) {
+            todaysCount = 0
+            todaysDate = currentDate
+            saveState()
+        }
 
         Log.d(
             TAG,
-            "State loaded - lastSensorValue: $lastSensorValue, sessionSteps: $sessionSteps, pendingSteps: $pendingSteps"
+            "State loaded - lastSensorValue: $lastSensorValue, sessionSteps: $sessionSteps, pendingSteps: $pendingSteps, todaysCount: $todaysCount, todaysDate: $todaysDate"
         )
     }
 
@@ -61,6 +75,8 @@ class StepCountManager(context: Context) {
             putFloat(KEY_LAST_SENSOR_VALUE, lastSensorValue)
             putInt(KEY_SESSION_STEPS, sessionSteps)
             putInt(KEY_PENDING_STEPS, pendingSteps)
+            putInt(KEY_TODAYS_COUNT, todaysCount)
+            putString(KEY_TODAYS_DATE, todaysDate)
             apply()
         }
     }
@@ -86,11 +102,12 @@ class StepCountManager(context: Context) {
                 // Valid step increment
                 sessionSteps += stepDifference
                 pendingSteps += stepDifference
+                todaysCount += stepDifference
                 lastSensorValue = sensorValue
 
                 Log.d(
                     TAG,
-                    "Steps detected: $stepDifference, Total session: $sessionSteps, Pending: $pendingSteps"
+                    "Steps detected: $stepDifference, Total session: $sessionSteps, Pending: $pendingSteps, Today's count: $todaysCount"
                 )
 
                 // Save to database if we have enough pending steps
@@ -185,9 +202,19 @@ class StepCountManager(context: Context) {
     }
 
     /**
-     * Get current session steps (not yet saved to database)
+     * Get today's step count
+     * @return Total steps for the current day
      */
-    fun getCurrentSessionSteps(): Int = sessionSteps
+    fun getTodaysCount(): Int {
+        // Check if it's a new day and reset if needed
+        val currentDate = TimeStampUtils.getTodaysDate()
+        if (todaysDate != currentDate) {
+            todaysCount = 0
+            todaysDate = currentDate
+            saveState()
+        }
+        return todaysCount
+    }
 
     /**
      * Clean up resources

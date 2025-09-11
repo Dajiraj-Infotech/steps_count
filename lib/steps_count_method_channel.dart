@@ -43,4 +43,10 @@ class MethodChannelStepsCount extends StepsCountPlatform {
     final result = await methodChannel.invokeMethod<bool>('isServiceRunning');
     return result ?? false;
   }
+
+  @override
+  Future<int> getTodaysCount() async {
+    final result = await methodChannel.invokeMethod<int>('getTodaysCount');
+    return result ?? 0;
+  }
 }

@@ -19,4 +19,8 @@ class StepsCount {
   Future<bool> isServiceRunning() {
     return StepsCountPlatform.instance.isServiceRunning();
   }
+
+  Future<int> getTodaysCount() {
+    return StepsCountPlatform.instance.getTodaysCount();
+  }
 }

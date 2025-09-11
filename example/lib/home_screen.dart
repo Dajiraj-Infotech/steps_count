@@ -52,7 +52,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _checkAllStatus() async {
     await _checkPermissionStatus();
-    await Future.delayed(const Duration(seconds: 1));
     await _checkServiceStatus();
     _updateTodayStepCount();
     _updateFilteredStepCount();
@@ -122,14 +121,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _updateTodayStepCount() async {
     try {
-      // Today's step count
-      final now = DateTime.now().toUtc();
-      final todayStartDate = now.startOfDay();
-      final todayEndDate = now.endOfDay();
-      _todayStepCount = await _stepsCounterPlugin.getStepCount(
-        startDate: todayStartDate,
-        endDate: todayEndDate,
-      );
+      // Today's step count using the new getTodaysCount method
+      _todayStepCount = await _stepsCounterPlugin.getTodaysCount();
       if (!mounted) return;
       setState(() {});
     } catch (e) {

@@ -47,6 +47,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "stopBackgroundService" -> stopBackgroundService(result)
             "isServiceRunning" -> isServiceRunning(result)
             "getStepCount" -> getStepCount(call, result)
+            "getTodaysCount" -> getTodaysCount(result)
             else -> result.notImplemented()
         }
     }
@@ -116,6 +117,16 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             result.success(stepCount)
         } catch (e: Exception) {
             result.error("STEP_COUNT_ERROR", "Failed to get step count: ${e.message}", null)
+        }
+    }
+
+    private fun getTodaysCount(result: Result) {
+        try {
+            // Get today's step count from service
+            val todaysCount = BackgroundServiceManager.getTodaysCount()
+            result.success(todaysCount)
+        } catch (e: Exception) {
+            result.error("TODAYS_COUNT_ERROR", "Failed to get today's count: ${e.message}", null)
         }
     }
 

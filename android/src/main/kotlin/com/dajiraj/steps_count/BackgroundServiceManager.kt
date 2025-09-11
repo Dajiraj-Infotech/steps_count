@@ -43,6 +43,16 @@ class BackgroundServiceManager : Service(), SensorEventListener {
                 }
             } ?: 0
         }
+
+        fun getTodaysCount(): Int {
+            return serviceInstance?.let { service ->
+                if (service::stepCountManager.isInitialized) {
+                    service.stepCountManager.getTodaysCount()
+                } else {
+                    0
+                }
+            } ?: 0
+        }
     }
 
     private lateinit var sensorManager: SensorManager
@@ -187,16 +197,16 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Get current step count for notification
-        val currentSteps = if (::stepCountManager.isInitialized) {
-            stepCountManager.getCurrentSessionSteps()
+        // Get today's step count for notification
+        val todaysSteps = if (::stepCountManager.isInitialized) {
+            stepCountManager.getTodaysCount()
         } else {
             0
         }
 
         return NotificationCompat.Builder(
             this, CHANNEL_ID
-        ).setContentTitle("Steps Count").setContentText("Steps: $currentSteps")
+        ).setContentTitle("Steps Count").setContentText("Today's Steps: $todaysSteps")
             .setSmallIcon(android.R.drawable.ic_dialog_info).setContentIntent(pendingIntent)
             .setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).build()

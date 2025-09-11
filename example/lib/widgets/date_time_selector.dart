@@ -178,6 +178,7 @@ class DateTimeSelector extends StatelessWidget {
     );
     if (picked != null && picked != startDate) {
       onStartDateSelected?.call(picked);
+      onStartTimeSelected?.call(TimeOfDay(hour: 0, minute: 0));
     }
   }
 
@@ -191,6 +192,7 @@ class DateTimeSelector extends StatelessWidget {
     );
     if (picked != null && picked != endDate) {
       onEndDateSelected?.call(picked);
+      onEndTimeSelected?.call(TimeOfDay(hour: 23, minute: 59));
     }
   }
 

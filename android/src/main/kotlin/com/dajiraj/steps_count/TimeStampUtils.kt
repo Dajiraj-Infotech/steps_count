@@ -1,6 +1,7 @@
 package com.dajiraj.steps_count
 
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
@@ -12,6 +13,11 @@ class TimeStampUtils {
          */
         fun getCurrentUtcTimestamp(): Long {
             return Instant.now().toEpochMilli()
+        }
+
+        fun getTodaysDate(): String {
+            val todayUtc = LocalDate.now(ZoneOffset.UTC)
+            return todayUtc.format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
         }
 
         /**
