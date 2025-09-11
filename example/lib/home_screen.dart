@@ -161,8 +161,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     try {
       await _stepsCounterPlugin.startBackgroundService();
-      await _checkServiceStatus();
       if (!mounted) return;
+      setState(() => _isServiceRunning = true);
       AppUtils.showSnackBar(context, 'Service started');
       _updateTodayStepCount();
       _updateFilteredStepCount();
@@ -187,8 +187,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     try {
       await _stepsCounterPlugin.stopBackgroundService();
-      await _checkServiceStatus();
       if (!mounted) return;
+      setState(() => _isServiceRunning = false);
       AppUtils.showSnackBar(context, 'Service stopped');
     } on PlatformException catch (e) {
       AppUtils.showSnackBar(

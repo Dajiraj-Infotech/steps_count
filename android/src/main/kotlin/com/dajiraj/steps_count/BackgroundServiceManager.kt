@@ -90,8 +90,7 @@ class BackgroundServiceManager : Service(), SensorEventListener {
                 setShowBadge(false)
             }
 
-            val notificationManager =
-                getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }
     }
@@ -197,7 +196,7 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
         return NotificationCompat.Builder(
             this, CHANNEL_ID
-        ).setContentTitle("Steps Counter").setContentText("Session steps: $currentSteps")
+        ).setContentTitle("Step Counts").setContentText("Steps: $currentSteps")
             .setSmallIcon(android.R.drawable.ic_dialog_info).setContentIntent(pendingIntent)
             .setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
