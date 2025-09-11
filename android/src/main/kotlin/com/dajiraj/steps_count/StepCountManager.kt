@@ -132,21 +132,10 @@ class StepCountManager(context: Context) {
     fun getStepCount(startDate: Long? = null, endDate: Long? = null): Int {
         return try {
             val dbSteps = database.getStepCount(startDate, endDate)
-
-            // Add current session steps if no date filter or current time is within range
-            val currentUtcTime = TimeStampUtils.getCurrentUtcTimestamp()
-            val includeSessionSteps = when {
-                startDate != null && currentUtcTime < startDate -> false
-                endDate != null && currentUtcTime > endDate -> false
-                else -> true
-            }
-
-            val totalSteps = dbSteps
-
             Log.d(
-                TAG, "Step count query - DB: $dbSteps, Total: $totalSteps"
+                TAG, "Step count query - Total: $dbSteps"
             )
-            totalSteps
+            dbSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")
             0

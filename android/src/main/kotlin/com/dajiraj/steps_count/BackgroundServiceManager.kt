@@ -33,26 +33,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             }
             context.startService(intent)
         }
-
-        fun getStepCount(startDate: Long? = null, endDate: Long? = null): Int {
-            return serviceInstance?.let { service ->
-                if (service::stepCountManager.isInitialized) {
-                    service.stepCountManager.getStepCount(startDate, endDate)
-                } else {
-                    0
-                }
-            } ?: 0
-        }
-
-        fun getTodaysCount(): Int {
-            return serviceInstance?.let { service ->
-                if (service::stepCountManager.isInitialized) {
-                    service.stepCountManager.getTodaysCount()
-                } else {
-                    0
-                }
-            } ?: 0
-        }
     }
 
     private lateinit var sensorManager: SensorManager

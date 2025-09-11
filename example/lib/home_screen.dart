@@ -124,6 +124,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       // Today's step count using the new getTodaysCount method
       _todayStepCount = await _stepsCounterPlugin.getTodaysCount();
+      debugPrint('Today\'s step count: $_todayStepCount');
       if (!mounted) return;
       setState(() {});
     } catch (e) {
@@ -163,6 +164,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         startDate: startDate,
         endDate: endDate,
       );
+      debugPrint('Filtered step count: $_stepCount');
       if (!mounted) return;
       setState(() {});
     } catch (e) {
