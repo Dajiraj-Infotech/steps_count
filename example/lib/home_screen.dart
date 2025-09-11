@@ -55,6 +55,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _checkAllStatus() async {
     await _checkPermissionStatus();
+    await _requestPermission();
     await _checkServiceStatus();
     _isInitialized = true;
     setState(() {});
@@ -72,7 +73,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (activityRecognitionStatus.isGranted && notificationStatus.isGranted) {
       _hasPermission = true;
     } else {
-      _requestPermission();
       _hasPermission = false;
     }
     setState(() {});
@@ -96,7 +96,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           color: Colors.red,
         );
         await openAppSettings();
-        _requestPermission();
+        await _checkPermissionStatus();
         return;
       }
       if (!mounted) return;
