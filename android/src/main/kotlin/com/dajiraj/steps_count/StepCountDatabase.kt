@@ -5,7 +5,6 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
-import java.util.*
 
 /**
  * SQLite database helper for storing step count data
@@ -76,7 +75,10 @@ class StepCountDatabase(context: Context) :
             val rowId = db.insert(TABLE_STEPS, null, values)
 
             if (rowId != -1L) {
-                Log.d(TAG, "Inserted $stepCount steps at ${Date(timestamp)} (ID: $rowId)")
+                Log.d(
+                    TAG,
+                    "Inserted $stepCount steps at ${TimeStampUtils.formatUtcTimestamp(timestamp)} UTC (ID: $rowId)"
+                )
             } else {
                 Log.e(TAG, "Failed to insert step count")
             }
@@ -117,13 +119,11 @@ class StepCountDatabase(context: Context) :
             }
             cursor.close()
 
+            val startDateTime = startDate?.let { TimeStampUtils.formatUtcTimestamp(it) + " UTC" }
+            val endDateTime = endDate?.let { TimeStampUtils.formatUtcTimestamp(it) + " UTC" }
             Log.d(
-                TAG,
-                "Query result: $totalSteps steps (start: ${startDate?.let { Date(it) }}, end: ${
-                    endDate?.let {
-                        Date(it)
-                    }
-                })")
+                TAG, "Query result: $totalSteps steps (start: $startDateTime, end: $endDateTime)"
+            )
             totalSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")

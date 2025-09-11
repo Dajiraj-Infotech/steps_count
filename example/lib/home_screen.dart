@@ -123,9 +123,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _updateTodayStepCount() async {
     try {
       // Today's step count
-      final now = DateTime.now();
-      final todayStartDate = now;
-      final todayEndDate = now;
+      final now = DateTime.now().toUtc();
+      final todayStartDate = now.startOfDay();
+      final todayEndDate = now.endOfDay();
       _todayStepCount = await _stepsCounterPlugin.getStepCount(
         startDate: todayStartDate,
         endDate: todayEndDate,
@@ -141,8 +141,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _updateFilteredStepCount() async {
     try {
       // Filtered step count
-      DateTime? startDate = _startDate;
-      DateTime? endDate = _endDate;
+      DateTime? startDate = _startDate?.toUtc();
+      DateTime? endDate = _endDate?.toUtc();
 
       // Apply time information if available
       if (_startDate != null && _startTime != null) {
@@ -226,7 +226,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       debugPrint('Error stopping service: ${e.message}');
     }
   }
-
 
   bool _isTimeAfter(TimeOfDay time1, TimeOfDay time2) {
     final minutes1 = time1.hour * 60 + time1.minute;
@@ -318,7 +317,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onClearSelection: _clearDateRange,
     );
   }
-
 
   Widget _buildTodayCountContainer() {
     return Container(

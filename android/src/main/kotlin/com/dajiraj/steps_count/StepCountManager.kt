@@ -123,10 +123,13 @@ class StepCountManager(context: Context) {
 
         coroutineScope.launch {
             try {
-                val currentTime = System.currentTimeMillis()
-                database.insertStepCount(pendingSteps, currentTime)
+                val utcTimestamp = TimeStampUtils.getCurrentUtcTimestamp()
+                database.insertStepCount(pendingSteps, utcTimestamp)
 
-                Log.d(TAG, "Saved $pendingSteps steps to database at ${Date(currentTime)}")
+                val utcTimestampFormated = TimeStampUtils.formatUtcTimestamp(utcTimestamp)
+                Log.d(
+                    TAG, "Saved $pendingSteps steps to database at $utcTimestampFormated (UTC)"
+                )
 
                 // Reset pending steps counter
                 pendingSteps = 0
@@ -158,10 +161,10 @@ class StepCountManager(context: Context) {
             val dbSteps = database.getStepCount(startDate, endDate)
 
             // Add current session steps if no date filter or current time is within range
-            val currentTime = System.currentTimeMillis()
+            val currentUtcTime = TimeStampUtils.getCurrentUtcTimestamp()
             val includeSessionSteps = when {
-                startDate != null && currentTime < startDate -> false
-                endDate != null && currentTime > endDate -> false
+                startDate != null && currentUtcTime < startDate -> false
+                endDate != null && currentUtcTime > endDate -> false
                 else -> true
             }
 
