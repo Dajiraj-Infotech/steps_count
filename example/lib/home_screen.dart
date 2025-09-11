@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:steps_count/steps_count.dart';
 import 'package:steps_count_example/utils/app_utils.dart';
+import 'package:steps_count_example/widgets/common_button.dart';
 import 'package:steps_count_example/widgets/date_time_selector.dart';
+import 'package:steps_count_example/widgets/step_count_card.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -239,7 +241,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Steps Count'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('Steps Count'),
+        centerTitle: true,
+        forceMaterialTransparency: true,
+      ),
       body: _isInitialized ? _buildBody() : _buildLoading(),
     );
   }
@@ -250,25 +256,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _buildBody() {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _buildDateSelectionSection(),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(child: _buildTodayCountContainer()),
-                const SizedBox(width: 10),
-                Expanded(child: _buildFilterCountContainer()),
-              ],
-            ),
-            const SizedBox(height: 30),
-            _buildServiceRequestBtn(),
-            const SizedBox(height: 30),
-            _buildPermissionBtn(),
-          ],
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildTodayCountContainer(),
+              const SizedBox(height: 20),
+              _buildDateSelectionSection(),
+              const SizedBox(height: 20),
+              _buildServiceRequestBtn(),
+              const SizedBox(height: 30),
+              _buildPermissionBtn(),
+            ],
+          ),
         ),
       ),
     );
@@ -307,99 +309,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _updateFilteredStepCount();
       },
       onClearSelection: _clearDateRange,
+      child: _buildFilterCountContainer(),
     );
   }
 
   Widget _buildTodayCountContainer() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
-      decoration: BoxDecoration(
-        color: _hasPermission ? Colors.green.shade100 : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: _hasPermission ? Colors.green : Colors.grey,
-          width: 2,
-        ),
-      ),
-      child: Column(
-        children: [
-          Text(
-            'Today\'s Steps',
-            style: Theme.of(context).textTheme.titleLarge,
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 10),
-          Text(
-            '$_todayStepCount',
-            style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-              color: _hasPermission
-                  ? Colors.green.shade700
-                  : Colors.grey.shade600,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
+    return StepCountCard(
+      title: 'Today\'s Steps',
+      subtitle: _hasPermission ? 'Keep it up!' : 'Permission required',
+      stepCount: _todayStepCount,
+      icon: Icons.directions_walk_rounded,
+      primaryColor: Colors.green,
+      shadowColor: Colors.green,
+      hasPermission: _hasPermission,
     );
   }
 
   Widget _buildFilterCountContainer() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
-      decoration: BoxDecoration(
-        color: _hasPermission ? Colors.green.shade100 : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: _hasPermission ? Colors.green : Colors.grey,
-          width: 2,
-        ),
-      ),
-      child: Column(
-        children: [
-          Text(
-            _startDate != null || _endDate != null
-                ? 'Steps\n(Filtered)'
-                : 'Steps\n(All Time)',
-            style: Theme.of(context).textTheme.titleLarge,
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 10),
-          Text(
-            '$_stepCount',
-            style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-              color: _hasPermission
-                  ? Colors.green.shade700
-                  : Colors.grey.shade600,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
+    final bool isFiltered = _startDate != null || _endDate != null;
+    return StepCountCard(
+      title: isFiltered ? 'Filtered Steps' : 'All Time Steps',
+      subtitle: isFiltered ? 'Custom date range' : 'Total recorded steps',
+      stepCount: _stepCount,
+      icon: isFiltered ? Icons.filter_list_rounded : Icons.timeline_rounded,
+      primaryColor: Colors.blue,
+      shadowColor: Colors.blue,
+      hasPermission: _hasPermission,
     );
   }
 
   Widget _buildServiceRequestBtn() {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        ElevatedButton.icon(
-          onPressed: _isServiceRunning ? null : _startService,
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('Start Service'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        Expanded(
+          child: CommonButton(
+            label: 'Start Service',
+            icon: Icons.play_arrow_rounded,
+            onPressed: _isServiceRunning ? null : _startService,
+            primaryColor: Colors.green.shade500,
+            shadowColor: Colors.green,
+            isEnabled: !_isServiceRunning,
           ),
         ),
-        ElevatedButton.icon(
-          onPressed: _isServiceRunning ? _stopService : null,
-          icon: const Icon(Icons.stop),
-          label: const Text('Stop Service'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.red,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        Expanded(
+          child: CommonButton(
+            label: 'Stop Service',
+            icon: Icons.stop_rounded,
+            onPressed: _isServiceRunning ? _stopService : null,
+            primaryColor: Colors.red.shade500,
+            shadowColor: Colors.red,
+            isEnabled: _isServiceRunning,
           ),
         ),
       ],
@@ -408,14 +367,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _buildPermissionBtn() {
     if (_hasPermission) return const SizedBox.shrink();
-    return ElevatedButton(
-      onPressed: _requestPermission,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.green,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+    return SizedBox(
+      width: double.infinity,
+      child: CommonButton(
+        label: 'Request Permission',
+        icon: Icons.security_rounded,
+        onPressed: _requestPermission,
+        primaryColor: Colors.orange.shade500,
+        shadowColor: Colors.orange,
+        isEnabled: true,
       ),
-      child: const Text('Request Permission'),
     );
   }
 }

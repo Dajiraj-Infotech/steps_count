@@ -51,6 +51,8 @@ class DateTimeSelector extends StatelessWidget {
   /// Custom text style for the title
   final TextStyle? titleStyle;
 
+  final Widget child;
+
   const DateTimeSelector({
     super.key,
     this.startDate,
@@ -66,12 +68,13 @@ class DateTimeSelector extends StatelessWidget {
     this.title,
     this.containerDecoration,
     this.titleStyle,
+    required this.child,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(15),
       decoration:
           containerDecoration ??
           BoxDecoration(
@@ -95,8 +98,8 @@ class DateTimeSelector extends StatelessWidget {
                     ),
               ),
               if (showClearButton && _hasAnySelection())
-                TextButton(
-                  onPressed: onClearSelection,
+                GestureDetector(
+                  onTap: onClearSelection,
                   child: const Text(
                     'Clear filters',
                     style: TextStyle(color: Colors.red),
@@ -104,7 +107,7 @@ class DateTimeSelector extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 15),
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
@@ -124,7 +127,7 @@ class DateTimeSelector extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 15),
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
@@ -146,6 +149,8 @@ class DateTimeSelector extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          child,
         ],
       ),
     );
