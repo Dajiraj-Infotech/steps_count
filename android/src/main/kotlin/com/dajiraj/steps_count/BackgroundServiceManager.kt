@@ -9,8 +9,6 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
-import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -25,13 +23,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         // Service state
         private var isRunning = false
         private var serviceInstance: BackgroundServiceManager? = null
-        private var isForceStopped = false
 
         // Public methods
         fun isServiceRunning(): Boolean = isRunning
 
         fun stopBackgroundService(context: Context) {
-            isForceStopped = true
             val intent = Intent(context, BackgroundServiceManager::class.java).apply {
                 action = "FORCE_STOP"
             }
@@ -52,7 +48,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var stepCounterSensor: Sensor? = null
     private lateinit var serviceScope: CoroutineScope
-    private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var stepCountManager: StepCountManager
 
     override fun onCreate() {
@@ -60,7 +55,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         serviceInstance = this
         createNotificationChannel()
         initializeSensors()
-        initializeWakeLock()
         initializeStepManager()
         serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     }
@@ -68,18 +62,15 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             "START_SERVICE" -> {
-                isForceStopped = false
                 startService()
             }
 
             "FORCE_STOP" -> {
-                isForceStopped = true
                 stopService()
             }
 
             else -> {
                 // Default action - start the service
-                isForceStopped = false
                 startService()
             }
         }
@@ -112,18 +103,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         Log.d(TAG, "Step counter sensor available: ${stepCounterSensor != null}")
     }
 
-    private fun initializeWakeLock() {
-        try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK, "${packageName}:StepsCounterWakeLock"
-            )
-            Log.d(TAG, "Wake lock initialized")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize wake lock: ${e.message}")
-        }
-    }
-
     private fun initializeStepManager() {
         try {
             stepCountManager = StepCountManager(this)
@@ -136,9 +115,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     private fun startService() {
         if (isRunning) return
         isRunning = true
-
-        // Acquire wake lock
-        acquireWakeLock()
 
         // Register sensor
         registerSensor()
@@ -160,9 +136,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         if (::stepCountManager.isInitialized) {
             stepCountManager.flushPendingSteps()
         }
-
-        // Release wake lock
-        releaseWakeLock()
 
         // Unregister sensor
         unregisterSensor()
@@ -199,48 +172,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         Log.d(TAG, "Sensor unregistered")
     }
 
-    private fun acquireWakeLock() {
-        try {
-            wakeLock?.let { lock ->
-                if (!lock.isHeld) {
-                    lock.acquire(10 * 60 * 1000L) // 10 minutes timeout
-                    Log.d(
-                        TAG, "Wake lock acquired"
-                    )
-                } else {
-                    Log.d(
-                        TAG, "Wake lock already held"
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(
-                TAG, "Failed to acquire wake lock: ${e.message}"
-            )
-        }
-    }
-
-    private fun releaseWakeLock() {
-        try {
-            wakeLock?.let { lock ->
-                if (lock.isHeld) {
-                    lock.release()
-                    Log.d(
-                        TAG, "Wake lock released"
-                    )
-                } else {
-                    Log.d(
-                        TAG, "Wake lock not held"
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(
-                TAG, "Failed to release wake lock: ${e.message}"
-            )
-        }
-    }
-
     private fun startForegroundService() {
         val notification = createNotification()
         startForeground(
@@ -274,19 +205,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
     private fun startBackgroundWork() {
         serviceScope.launch {
-            var wakeLockRenewCounter = 0
 
             while (isRunning) {
                 try {
                     // Update notification
                     updateNotification()
-
-                    // Renew wake lock every 5 minutes (60 iterations * 5 seconds)
-                    wakeLockRenewCounter++
-                    if (wakeLockRenewCounter >= 60) {
-                        renewWakeLock()
-                        wakeLockRenewCounter = 0
-                    }
 
                     // Sleep for 5 seconds
                     delay(5000)
@@ -296,24 +219,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
                     )
                 }
             }
-        }
-    }
-
-    private fun renewWakeLock() {
-        try {
-            wakeLock?.let { lock ->
-                if (lock.isHeld) {
-                    lock.release()
-                    lock.acquire(10 * 60 * 1000L) // Renew for another 10 minutes
-                    Log.d(
-                        TAG, "Wake lock renewed"
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(
-                TAG, "Failed to renew wake lock: ${e.message}"
-            )
         }
     }
 
@@ -339,16 +244,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         // Handle accuracy changes if needed
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        super.onTaskRemoved(rootIntent)
-        Log.d(
-            TAG, "Task removed, scheduling restart"
-        )
-
-        // Schedule service restart
-        scheduleServiceRestart()
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "Service destroyed")
@@ -361,9 +256,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             stepCountManager.cleanup()
         }
 
-        // Release wake lock
-        releaseWakeLock()
-
         // Unregister sensor
         unregisterSensor()
 
@@ -372,92 +264,5 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
         // Stop foreground service
         stopForeground(STOP_FOREGROUND_REMOVE)
-
-        // Schedule restart if not force stopped
-        if (!isForceStopped) {
-            Log.d(
-                TAG, "Service destroyed unexpectedly, scheduling restart..."
-            )
-            scheduleServiceRestart()
-        } else {
-            Log.d(
-                TAG, "Service was force stopped, not restarting"
-            )
-        }
-    }
-
-    private fun scheduleServiceRestart() {
-        try {
-            val restartIntent =
-                Intent(applicationContext, BackgroundServiceManager::class.java).apply {
-                    action = "START_SERVICE"
-                }
-
-            val pendingIntent = PendingIntent.getService(
-                applicationContext,
-                1,
-                restartIntent,
-                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            // Simple 3-second delay for restart
-            val delayMs = 3000L
-
-            val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
-
-            // Check if we can use exact alarms (Android 12+)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (alarmManager.canScheduleExactAlarms()) {
-                    // Use exact alarm if permission is available
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                        SystemClock.elapsedRealtime() + delayMs,
-                        pendingIntent
-                    )
-                    Log.d(TAG, "Service restart scheduled with exact alarm in ${delayMs}ms")
-                } else {
-                    // Fallback to inexact alarm
-                    alarmManager.setAndAllowWhileIdle(
-                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                        SystemClock.elapsedRealtime() + delayMs,
-                        pendingIntent
-                    )
-                    Log.w(TAG, "Exact alarm permission not available, using inexact alarm")
-                }
-            } else {
-                // For older Android versions, use exact alarm directly
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    SystemClock.elapsedRealtime() + delayMs,
-                    pendingIntent
-                )
-                Log.d(TAG, "Service restart scheduled with exact alarm in ${delayMs}ms")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to schedule service restart: ${e.message}")
-
-            // Try fallback with inexact alarm
-            try {
-                val restartIntent =
-                    Intent(applicationContext, BackgroundServiceManager::class.java).apply {
-                        action = "START_SERVICE"
-                    }
-                val pendingIntent = PendingIntent.getService(
-                    applicationContext,
-                    1,
-                    restartIntent,
-                    PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
-                )
-                val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    SystemClock.elapsedRealtime() + 3000L,
-                    pendingIntent
-                )
-                Log.d(TAG, "Fallback inexact alarm scheduled successfully")
-            } catch (fallbackException: Exception) {
-                Log.e(TAG, "Failed to schedule fallback alarm: ${fallbackException.message}")
-            }
-        }
     }
 }
