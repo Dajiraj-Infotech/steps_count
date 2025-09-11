@@ -34,6 +34,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     _stepsChannel.setMethodCallHandler(_methodHandler);
     _checkAllStatus();
+    _updateTodayStepCount();
+    _updateFilteredStepCount();
   }
 
   @override
@@ -43,7 +45,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _methodHandler(MethodCall call) async {
-    _checkServiceStatus();
     if (call.method == "onSensorChanged") {
       _updateTodayStepCount();
       _updateFilteredStepCount();
@@ -53,8 +54,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _checkAllStatus() async {
     await _checkPermissionStatus();
     await _checkServiceStatus();
-    _updateTodayStepCount();
-    _updateFilteredStepCount();
     _isInitialized = true;
     setState(() {});
   }
