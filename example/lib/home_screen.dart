@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:steps_count/steps_count.dart';
+import 'package:steps_count_example/utils/app_utils.dart';
+import 'package:steps_count_example/widgets/common_button.dart';
+import 'package:steps_count_example/widgets/date_time_selector.dart';
+import 'package:steps_count_example/widgets/step_count_card.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -10,124 +13,194 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _stepCount = 0;
-  bool _hasPermission = false;
+  int _todayStepCount = 0;
+  bool _isInitialized = false;
+  bool _isServiceRunning = false;
   final _stepsCounterPlugin = StepsCount();
+  final _stepsChannel = MethodChannel('steps_count');
+
+  // Date selection variables
+  DateTime? _startDate;
+  DateTime? _endDate;
+
+  // Time selection variables
+  TimeOfDay? _startTime;
+  TimeOfDay? _endTime;
 
   @override
   void initState() {
     super.initState();
-    _checkPermissionStatus();
+    WidgetsBinding.instance.addObserver(this);
+    _stepsChannel.setMethodCallHandler(_methodHandler);
+    _initializeApp();
   }
 
-  Future<void> _checkPermissionStatus() async {
-    final activityRecognitionStatus =
-        await Permission.activityRecognition.status;
-    final notificationStatus = await Permission.notification.status;
-    if (activityRecognitionStatus.isGranted && notificationStatus.isGranted) {
-      _hasPermission = true;
-    } else {
-      _hasPermission = false;
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    _checkServiceStatus();
+  }
+
+  Future<void> _methodHandler(MethodCall call) async {
+    if (call.method == "onSensorChanged") {
+      _updateTodayStepCount();
+      _updateFilteredStepCount();
     }
+  }
+
+  Future<void> _initializeApp() async {
+    await _checkServiceStatus();
+    await _updateTodayStepCount();
+    await _updateFilteredStepCount();
+    _isInitialized = true;
     setState(() {});
   }
 
-  Future<void> _requestPermission() async {
-    if (_hasPermission) {
-      debugPrint('Permission already granted');
-      return;
-    }
-    try {
-      final activityRecognitionStatus = await Permission.activityRecognition
-          .request();
-      final notificationStatus = await Permission.notification.request();
-      if (activityRecognitionStatus.isPermanentlyDenied ||
-          notificationStatus.isPermanentlyDenied) {
-        showSnackBar('Permission permanently denied', color: Colors.red);
-        await openAppSettings();
-        _requestPermission();
-        return;
-      }
-      await _checkPermissionStatus();
-      if (activityRecognitionStatus.isGranted && notificationStatus.isGranted) {
-        _hasPermission = true;
-        showSnackBar('Permission granted!');
-      } else {
-        _hasPermission = false;
-        showSnackBar('Permission denied', color: Colors.red);
-      }
-    } catch (e) {
-      showSnackBar('Error requesting permission: $e', color: Colors.red);
-      debugPrint('Error requesting permission: $e');
-    }
+  Future<void> _checkServiceStatus() async {
+    _isServiceRunning = await _stepsCounterPlugin.isServiceRunning();
     setState(() {});
   }
 
-  Future<void> _updateStepCount() async {
+  Future<void> _updateTodayStepCount() async {
     try {
-      final stepCount = await _stepsCounterPlugin.getStepCount();
-      if (mounted) {
-        setState(() {
-          _stepCount = stepCount;
-        });
-      }
+      // Today's step count using the new getTodaysCount method
+      _todayStepCount = await _stepsCounterPlugin.getTodaysCount();
+      debugPrint('Today\'s step count: $_todayStepCount');
+      if (!mounted) return;
+      setState(() {});
     } catch (e) {
       // Silently handle step count errors to avoid spam
+      debugPrint('Error updating step count: $e');
+    }
+  }
+
+  Future<void> _updateFilteredStepCount() async {
+    try {
+      // Filtered step count
+      DateTime? startDate = _startDate?.toUtc();
+      DateTime? endDate = _endDate?.toUtc();
+
+      // Apply time information if available
+      if (_startDate != null && _startTime != null) {
+        startDate = DateTime(
+          _startDate!.year,
+          _startDate!.month,
+          _startDate!.day,
+          _startTime!.hour,
+          _startTime!.minute,
+        );
+      }
+
+      if (_endDate != null && _endTime != null) {
+        endDate = DateTime(
+          _endDate!.year,
+          _endDate!.month,
+          _endDate!.day,
+          _endTime!.hour,
+          _endTime!.minute,
+        );
+      }
+
+      _stepCount = await _stepsCounterPlugin.getStepCount(
+        startDate: startDate,
+        endDate: endDate,
+      );
+      debugPrint('Filtered step count: $_stepCount');
+      if (!mounted) return;
+      setState(() {});
+    } catch (e) {
+      // Silently handle step count errors to avoid spam
+      debugPrint('Error updating step count: $e');
     }
   }
 
   Future<void> _startService() async {
-    if (!_hasPermission) {
-      showSnackBar('Please grant permission first', color: Colors.red);
-      return;
-    }
     try {
       await _stepsCounterPlugin.startBackgroundService();
-      showSnackBar('Service started');
-      _updateStepCount();
+      if (!mounted) return;
+      setState(() => _isServiceRunning = true);
+      AppUtils.showSnackBar(context, 'Service started');
+      _updateTodayStepCount();
+      _updateFilteredStepCount();
     } on PlatformException catch (e) {
-      showSnackBar('Error starting service: ${e.message}', color: Colors.red);
+      AppUtils.showSnackBar(
+        context,
+        'Error starting service: ${e.message}',
+        color: Colors.red,
+      );
       debugPrint('Error starting service: ${e.message}');
     }
   }
 
   Future<void> _stopService() async {
-    if (!_hasPermission) {
-      showSnackBar('Please grant permission first', color: Colors.red);
-      return;
-    }
     try {
       await _stepsCounterPlugin.stopBackgroundService();
-      showSnackBar('Service stopped');
+      if (!mounted) return;
+      setState(() => _isServiceRunning = false);
+      AppUtils.showSnackBar(context, 'Service stopped');
     } on PlatformException catch (e) {
-      showSnackBar('Error stopping service: ${e.message}', color: Colors.red);
+      AppUtils.showSnackBar(
+        context,
+        'Error stopping service: ${e.message}',
+        color: Colors.red,
+      );
       debugPrint('Error stopping service: ${e.message}');
     }
   }
 
-  void showSnackBar(String message, {Color color = Colors.green}) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
+  bool _isTimeAfter(TimeOfDay time1, TimeOfDay time2) {
+    final minutes1 = time1.hour * 60 + time1.minute;
+    final minutes2 = time2.hour * 60 + time2.minute;
+    return minutes1 < minutes2;
+  }
+
+  void _clearDateRange() {
+    setState(() {
+      _startDate = null;
+      _endDate = null;
+      _startTime = null;
+      _endTime = null;
+    });
+    _updateTodayStepCount();
+    _updateFilteredStepCount();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Steps Count')),
-      body: Center(
+      appBar: AppBar(
+        title: const Text('Steps Count'),
+        centerTitle: true,
+        forceMaterialTransparency: true,
+      ),
+      body: _isInitialized ? _buildBody() : _buildLoading(),
+    );
+  }
+
+  Widget _buildLoading() {
+    return const Center(child: CircularProgressIndicator());
+  }
+
+  Widget _buildBody() {
+    return SafeArea(
+      child: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(20.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildCountContainer(),
-              const SizedBox(height: 30),
-              if (!_hasPermission) ...[
-                _buildPermissionBtn(),
-                const SizedBox(height: 30),
-              ],
+              _buildTodayCountContainer(),
+              const SizedBox(height: 20),
+              _buildDateSelectionSection(),
+              const SizedBox(height: 20),
               _buildServiceRequestBtn(),
             ],
           ),
@@ -136,69 +209,87 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildCountContainer() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _hasPermission ? Colors.green.shade100 : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: _hasPermission ? Colors.green : Colors.grey,
-          width: 2,
-        ),
-      ),
-      child: Column(
-        children: [
-          Text('Step Count', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 10),
-          Text(
-            '$_stepCount',
-            style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-              color: _hasPermission
-                  ? Colors.green.shade700
-                  : Colors.grey.shade600,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
+  Widget _buildDateSelectionSection() {
+    return DateTimeSelector(
+      startDate: _startDate,
+      endDate: _endDate,
+      startTime: _startTime,
+      endTime: _endTime,
+      onStartDateSelected: (date) {
+        setState(() {
+          _startDate = date;
+          if (_endDate != null && _endDate!.isBefore(date!)) {
+            _endDate = date;
+          }
+        });
+        _updateFilteredStepCount();
+      },
+      onEndDateSelected: (date) {
+        setState(() => _endDate = date);
+        _updateFilteredStepCount();
+      },
+      onStartTimeSelected: (time) {
+        setState(() {
+          _startTime = time;
+          if (_endTime != null && _isTimeAfter(_endTime!, time!)) {
+            _endTime = time;
+          }
+        });
+        _updateFilteredStepCount();
+      },
+      onEndTimeSelected: (time) {
+        setState(() => _endTime = time);
+        _updateFilteredStepCount();
+      },
+      onClearSelection: _clearDateRange,
+      child: _buildFilterCountContainer(),
     );
   }
 
-  Widget _buildPermissionBtn() {
-    return ElevatedButton(
-      onPressed: _requestPermission,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.blue,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      ),
-      child: const Text('Grant Permission'),
+  Widget _buildTodayCountContainer() {
+    return StepCountCard(
+      title: 'Today\'s Steps',
+      subtitle: 'Keep it up!',
+      stepCount: _todayStepCount,
+      icon: Icons.directions_walk_rounded,
+      primaryColor: Colors.green,
+      shadowColor: Colors.green,
+    );
+  }
+
+  Widget _buildFilterCountContainer() {
+    final bool isFiltered = _startDate != null || _endDate != null;
+    return StepCountCard(
+      title: isFiltered ? 'Filtered Steps' : 'All Time Steps',
+      subtitle: isFiltered ? 'Custom date range' : 'Total recorded steps',
+      stepCount: _stepCount,
+      icon: isFiltered ? Icons.filter_list_rounded : Icons.timeline_rounded,
+      primaryColor: Colors.blue,
+      shadowColor: Colors.blue,
     );
   }
 
   Widget _buildServiceRequestBtn() {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        ElevatedButton.icon(
-          onPressed: _startService,
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('Start Service'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        Expanded(
+          child: CommonButton(
+            label: 'Start Service',
+            icon: Icons.play_arrow_rounded,
+            onPressed: _isServiceRunning ? null : _startService,
+            primaryColor: Colors.green.shade500,
+            shadowColor: Colors.green,
+            isEnabled: !_isServiceRunning,
           ),
         ),
-        ElevatedButton.icon(
-          onPressed: _stopService,
-          icon: const Icon(Icons.stop),
-          label: const Text('Stop Service'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.red,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        Expanded(
+          child: CommonButton(
+            label: 'Stop Service',
+            icon: Icons.stop_rounded,
+            onPressed: _isServiceRunning ? _stopService : null,
+            primaryColor: Colors.red.shade500,
+            shadowColor: Colors.red,
+            isEnabled: _isServiceRunning,
           ),
         ),
       ],

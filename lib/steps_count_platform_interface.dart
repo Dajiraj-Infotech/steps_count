@@ -35,7 +35,15 @@ abstract class StepsCountPlatform extends PlatformInterface {
     );
   }
 
-  Future<int> getStepCount() {
+  Future<int> getStepCount({DateTime? startDate, DateTime? endDate}) {
     throw UnimplementedError('getStepCount() has not been implemented.');
+  }
+
+  Future<bool> isServiceRunning() {
+    throw UnimplementedError('isServiceRunning() has not been implemented.');
+  }
+
+  Future<int> getTodaysCount() {
+    throw UnimplementedError('getTodaysCount() has not been implemented.');
   }
 }

@@ -15,49 +15,18 @@ class BootServiceManager : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
-            Intent.ACTION_BOOT_COMPLETED -> {
-                Log.d(TAG, "✅ BOOT_COMPLETED - Device boot completed, starting service...")
-                startServiceWithDelay(context)
+            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_LOCKED_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, "android.intent.action.QUICKBOOT_POWERON" -> {
+                startStepsService(context)
             }
 
-            Intent.ACTION_LOCKED_BOOT_COMPLETED -> {
-                Log.d(TAG, "🔒 LOCKED_BOOT_COMPLETED - Device booted but locked")
-                startServiceWithDelay(context)
-            }
-
-            Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                Log.d(TAG, "📦 PACKAGE_REPLACED - App updated")
-                startServiceWithDelay(context)
-            }
-
-            Intent.ACTION_USER_UNLOCKED -> {
-                Log.d(TAG, "🔓 USER_UNLOCKED - User unlocked device")
+            Intent.ACTION_USER_UNLOCKED, Intent.ACTION_USER_PRESENT -> {
                 checkAndStartService(context)
-            }
-
-            Intent.ACTION_USER_PRESENT -> {
-                Log.d(TAG, "👤 USER_PRESENT - User is present")
-                checkAndStartService(context)
-            }
-
-            "android.intent.action.QUICKBOOT_POWERON" -> {
-                Log.d(TAG, "⚡ QUICKBOOT_POWERON - Quick boot detected")
-                startServiceWithDelay(context)
             }
 
             else -> {
                 Log.w(TAG, "❓ UNKNOWN ACTION: ${intent.action}")
             }
         }
-    }
-
-    private fun startServiceWithDelay(context: Context) {
-        Log.d(TAG, "⏰ Scheduling service start with 5-second delay...")
-
-        Handler(Looper.getMainLooper()).postDelayed({
-            Log.d(TAG, "⏰ Delay completed, now starting service...")
-            startStepsService(context)
-        }, 5000) // 5 second delay to ensure system is ready
     }
 
     private fun checkAndStartService(context: Context) {
@@ -69,8 +38,6 @@ class BootServiceManager : BroadcastReceiver() {
         if (!isRunning) {
             Log.d(TAG, "🚀 Service not running, starting immediately...")
             startStepsService(context)
-        } else {
-            Log.d(TAG, "✅ Service already running, no action needed")
         }
     }
 
