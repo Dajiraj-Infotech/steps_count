@@ -141,11 +141,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         isRunning = false
         serviceInstance = null
 
-        // Flush pending steps before stopping
-        if (::stepCountManager.isInitialized) {
-            stepCountManager.flushPendingSteps()
-        }
-
         // Unregister sensor
         unregisterSensor()
 

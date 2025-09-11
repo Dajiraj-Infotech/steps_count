@@ -18,8 +18,6 @@ class StepCountManager(context: Context) {
         private const val PREFS_NAME = "steps_count_prefs"
         private const val KEY_LAST_SENSOR_VALUE = "last_sensor_value"
         private const val KEY_SESSION_STEPS = "session_steps"
-        private const val KEY_PENDING_STEPS = "pending_steps"
-        private const val STEPS_BATCH_SIZE = 10
 
         var stepCountChannel: MethodChannel? = null
     }
@@ -32,7 +30,6 @@ class StepCountManager(context: Context) {
     // Track step counting state
     private var lastSensorValue: Float = 0f
     private var sessionSteps: Int = 0
-    private var pendingSteps: Int = 0
     private var isInitialized = false
 
     init {
@@ -45,11 +42,9 @@ class StepCountManager(context: Context) {
     private fun loadState() {
         lastSensorValue = prefs.getFloat(KEY_LAST_SENSOR_VALUE, 0f)
         sessionSteps = prefs.getInt(KEY_SESSION_STEPS, 0)
-        pendingSteps = prefs.getInt(KEY_PENDING_STEPS, 0)
 
         Log.d(
-            TAG,
-            "State loaded - lastSensorValue: $lastSensorValue, sessionSteps: $sessionSteps, pendingSteps: $pendingSteps"
+            TAG, "State loaded - lastSensorValue: $lastSensorValue, sessionSteps: $sessionSteps"
         )
     }
 
@@ -60,7 +55,6 @@ class StepCountManager(context: Context) {
         prefs.edit().apply {
             putFloat(KEY_LAST_SENSOR_VALUE, lastSensorValue)
             putInt(KEY_SESSION_STEPS, sessionSteps)
-            putInt(KEY_PENDING_STEPS, pendingSteps)
             apply()
         }
     }
@@ -85,27 +79,20 @@ class StepCountManager(context: Context) {
             if (stepDifference > 0) {
                 // Valid step increment
                 sessionSteps += stepDifference
-                pendingSteps += stepDifference
                 lastSensorValue = sensorValue
 
                 Log.d(
-                    TAG,
-                    "Steps detected: $stepDifference, Total session: $sessionSteps, Pending: $pendingSteps"
+                    TAG, "Steps detected: $stepDifference, Total session: $sessionSteps"
                 )
 
-                // Save to database if we have enough pending steps
-                if (pendingSteps >= STEPS_BATCH_SIZE) {
-                    savePendingSteps()
-                }
+                // Save to database immediately
+                saveStepsToDatabase(stepDifference)
 
                 // Save state
                 saveState()
             } else if (stepDifference < 0) {
                 // Handle sensor reset (device reboot, etc.)
-                Log.w(TAG, "Sensor reset detected. Saving pending steps and reinitializing.")
-                if (pendingSteps > 0) {
-                    savePendingSteps()
-                }
+                Log.w(TAG, "Sensor reset detected. Reinitializing.")
                 lastSensorValue = sensorValue
                 saveState()
             }
@@ -116,37 +103,23 @@ class StepCountManager(context: Context) {
     }
 
     /**
-     * Save pending steps to database and reset counter
+     * Save steps to database immediately
      */
-    private fun savePendingSteps() {
-        if (pendingSteps <= 0) return
+    private fun saveStepsToDatabase(steps: Int) {
+        if (steps <= 0) return
 
         coroutineScope.launch {
             try {
                 val utcTimestamp = TimeStampUtils.getCurrentUtcTimestamp()
-                database.insertStepCount(pendingSteps, utcTimestamp)
+                database.insertStepCount(steps, utcTimestamp)
 
                 val utcTimestampFormated = TimeStampUtils.formatUtcTimestamp(utcTimestamp)
                 Log.d(
-                    TAG, "Saved $pendingSteps steps to database at $utcTimestampFormated (UTC)"
+                    TAG, "Saved $steps steps to database at $utcTimestampFormated (UTC)"
                 )
-
-                // Reset pending steps counter
-                pendingSteps = 0
-                saveState()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save steps to database: ${e.message}")
             }
-        }
-    }
-
-    /**
-     * Force save any pending steps (called when service stops)
-     */
-    fun flushPendingSteps() {
-        if (pendingSteps > 0) {
-            Log.d(TAG, "Flushing $pendingSteps pending steps")
-            savePendingSteps()
         }
     }
 
@@ -168,14 +141,10 @@ class StepCountManager(context: Context) {
                 else -> true
             }
 
-            val totalSteps = if (includeSessionSteps) {
-                dbSteps + pendingSteps
-            } else {
-                dbSteps
-            }
+            val totalSteps = dbSteps
 
             Log.d(
-                TAG, "Step count query - DB: $dbSteps, Pending: $pendingSteps, Total: $totalSteps"
+                TAG, "Step count query - DB: $dbSteps, Total: $totalSteps"
             )
             totalSteps
         } catch (e: Exception) {
@@ -192,18 +161,15 @@ class StepCountManager(context: Context) {
         return try {
             val startTimestamp = TimeStampUtils.getTodaysStartTimestamp()
             val endTimestamp = TimeStampUtils.getTodaysEndTimestamp()
-            
+
             // Get steps from database for today's range
             val dbSteps = database.getStepCount(startTimestamp, endTimestamp)
-            
-            // Add pending steps that haven't been saved yet
-            val totalSteps = dbSteps + pendingSteps
-            
-            Log.d(TAG, "Today's step count - DB: $dbSteps, Pending: $pendingSteps, Total: $totalSteps")
-            totalSteps
+
+            Log.d(TAG, "Today's step count - DB: $dbSteps, Total: $dbSteps")
+            dbSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting today's step count: ${e.message}")
-            pendingSteps // Return at least pending steps if DB query fails
+            0 // Return 0 if DB query fails
         }
     }
 
@@ -211,7 +177,6 @@ class StepCountManager(context: Context) {
      * Clean up resources
      */
     fun cleanup() {
-        flushPendingSteps()
         database.close()
     }
 }
