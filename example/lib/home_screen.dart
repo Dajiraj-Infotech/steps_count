@@ -255,21 +255,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildBody() {
-    return Center(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildTodayCountContainer(),
-              const SizedBox(height: 20),
-              _buildDateSelectionSection(),
-              const SizedBox(height: 20),
-              _buildServiceRequestBtn(),
-              const SizedBox(height: 30),
-              _buildPermissionBtn(),
-            ],
+    return SafeArea(
+      child: Center(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildTodayCountContainer(),
+                const SizedBox(height: 20),
+                _buildDateSelectionSection(),
+                const SizedBox(height: 20),
+                _buildServiceRequestBtn(),
+                const SizedBox(height: 30),
+                _buildPermissionBtn(),
+              ],
+            ),
           ),
         ),
       ),
