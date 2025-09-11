@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:steps_count/steps_count.dart';
 import 'package:steps_count_example/utils/app_utils.dart';
 import 'package:steps_count_example/widgets/common_button.dart';
@@ -18,7 +17,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _stepCount = 0;
   int _todayStepCount = 0;
   bool _isInitialized = false;
-  bool _hasPermission = false;
   bool _isServiceRunning = false;
   final _stepsCounterPlugin = StepsCount();
   final _stepsChannel = MethodChannel('steps_count');
@@ -34,10 +32,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _stepsChannel.setMethodCallHandler(_methodHandler);
-    _checkAllStatus();
-    _updateTodayStepCount();
-    _updateFilteredStepCount();
+    _initializeApp();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   @override
@@ -53,70 +56,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _checkAllStatus() async {
-    await _checkPermissionStatus();
-    await _requestPermission();
+  Future<void> _initializeApp() async {
     await _checkServiceStatus();
+    await _updateTodayStepCount();
+    await _updateFilteredStepCount();
     _isInitialized = true;
     setState(() {});
   }
 
   Future<void> _checkServiceStatus() async {
     _isServiceRunning = await _stepsCounterPlugin.isServiceRunning();
-    setState(() {});
-  }
-
-  Future<void> _checkPermissionStatus() async {
-    final activityRecognitionStatus =
-        await Permission.activityRecognition.status;
-    final notificationStatus = await Permission.notification.status;
-    if (activityRecognitionStatus.isGranted && notificationStatus.isGranted) {
-      _hasPermission = true;
-    } else {
-      _hasPermission = false;
-    }
-    setState(() {});
-  }
-
-  Future<void> _requestPermission() async {
-    if (_hasPermission) {
-      debugPrint('Permission already granted');
-      return;
-    }
-    try {
-      final activityRecognitionStatus = await Permission.activityRecognition
-          .request();
-      final notificationStatus = await Permission.notification.request();
-      if (!mounted) return;
-      if (activityRecognitionStatus.isPermanentlyDenied ||
-          notificationStatus.isPermanentlyDenied) {
-        AppUtils.showSnackBar(
-          context,
-          'Permission permanently denied',
-          color: Colors.red,
-        );
-        await openAppSettings();
-        await _checkPermissionStatus();
-        return;
-      }
-      if (!mounted) return;
-      await _checkPermissionStatus();
-      if (!mounted) return;
-      if (activityRecognitionStatus.isGranted && notificationStatus.isGranted) {
-        _hasPermission = true;
-        AppUtils.showSnackBar(context, 'Permission granted!');
-      } else {
-        _hasPermission = false;
-        AppUtils.showSnackBar(context, 'Permission denied', color: Colors.red);
-      }
-    } catch (e) {
-      AppUtils.showSnackBar(
-        context,
-        'Error requesting permission: $e',
-        color: Colors.red,
-      );
-      debugPrint('Error requesting permission: $e');
-    }
     setState(() {});
   }
 
@@ -174,14 +123,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _startService() async {
-    if (!_hasPermission) {
-      AppUtils.showSnackBar(
-        context,
-        'Please grant permission first',
-        color: Colors.red,
-      );
-      return;
-    }
     try {
       await _stepsCounterPlugin.startBackgroundService();
       if (!mounted) return;
@@ -200,14 +141,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _stopService() async {
-    if (!_hasPermission) {
-      AppUtils.showSnackBar(
-        context,
-        'Please grant permission first',
-        color: Colors.red,
-      );
-      return;
-    }
     try {
       await _stepsCounterPlugin.stopBackgroundService();
       if (!mounted) return;
@@ -258,22 +191,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _buildBody() {
     return SafeArea(
-      child: Center(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildTodayCountContainer(),
-                const SizedBox(height: 20),
-                _buildDateSelectionSection(),
-                const SizedBox(height: 20),
-                _buildServiceRequestBtn(),
-                const SizedBox(height: 30),
-                _buildPermissionBtn(),
-              ],
-            ),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildTodayCountContainer(),
+              const SizedBox(height: 20),
+              _buildDateSelectionSection(),
+              const SizedBox(height: 20),
+              _buildServiceRequestBtn(),
+            ],
           ),
         ),
       ),
@@ -320,12 +249,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _buildTodayCountContainer() {
     return StepCountCard(
       title: 'Today\'s Steps',
-      subtitle: _hasPermission ? 'Keep it up!' : 'Permission required',
+      subtitle: 'Keep it up!',
       stepCount: _todayStepCount,
       icon: Icons.directions_walk_rounded,
       primaryColor: Colors.green,
       shadowColor: Colors.green,
-      hasPermission: _hasPermission,
     );
   }
 
@@ -338,7 +266,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       icon: isFiltered ? Icons.filter_list_rounded : Icons.timeline_rounded,
       primaryColor: Colors.blue,
       shadowColor: Colors.blue,
-      hasPermission: _hasPermission,
     );
   }
 
@@ -366,21 +293,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildPermissionBtn() {
-    if (_hasPermission) return const SizedBox.shrink();
-    return SizedBox(
-      width: double.infinity,
-      child: CommonButton(
-        label: 'Request Permission',
-        icon: Icons.security_rounded,
-        onPressed: _requestPermission,
-        primaryColor: Colors.orange.shade500,
-        shadowColor: Colors.orange,
-        isEnabled: true,
-      ),
     );
   }
 }

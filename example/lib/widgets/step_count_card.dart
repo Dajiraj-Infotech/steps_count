@@ -7,7 +7,6 @@ class StepCountCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final int stepCount;
-  final bool hasPermission;
 
   const StepCountCard({
     super.key,
@@ -17,7 +16,6 @@ class StepCountCard extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.stepCount,
-    required this.hasPermission,
   });
 
   @override
@@ -25,25 +23,16 @@ class StepCountCard extends StatelessWidget {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        gradient: hasPermission
-            ? LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [primaryColor, primaryColor],
-                stops: const [0.0, 1.0],
-              )
-            : LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Colors.grey.shade300, Colors.grey.shade500],
-                stops: const [0.0, 1.0],
-              ),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [primaryColor, primaryColor],
+          stops: const [0.0, 1.0],
+        ),
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: hasPermission
-                ? shadowColor.withValues(alpha: 0.3)
-                : Colors.grey.withValues(alpha: 0.3),
+            color: shadowColor.withValues(alpha: 0.3),
             blurRadius: 12,
             offset: const Offset(0, 6),
             spreadRadius: 0,

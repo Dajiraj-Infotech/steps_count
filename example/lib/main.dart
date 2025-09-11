@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:steps_count_example/home_screen.dart';
+import 'package:steps_count_example/app_wrapper.dart';
 
 void main() {
   runApp(const MyApp());
@@ -10,6 +10,15 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(home: const HomeScreen());
+    return MaterialApp(
+      title: 'Steps Count',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        useMaterial3: true,
+        fontFamily: 'Roboto',
+      ),
+      home: const AppWrapper(),
+      debugShowCheckedModeBanner: false,
+    );
   }
 }
