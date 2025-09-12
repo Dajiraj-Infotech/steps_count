@@ -109,7 +109,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       }
 
-      _stepCount = await _stepsCounterPlugin.getStepCount(
+      _stepCount = await _stepsCounterPlugin.getStepCounts(
         startDate: startDate,
         endDate: endDate,
       );

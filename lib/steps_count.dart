@@ -9,18 +9,18 @@ class StepsCount {
     return StepsCountPlatform.instance.stopBackgroundService();
   }
 
-  Future<int> getStepCount({DateTime? startDate, DateTime? endDate}) {
-    return StepsCountPlatform.instance.getStepCount(
-      startDate: startDate, 
-      endDate: endDate
-    );
-  }
-
   Future<bool> isServiceRunning() {
     return StepsCountPlatform.instance.isServiceRunning();
   }
 
   Future<int> getTodaysCount() {
     return StepsCountPlatform.instance.getTodaysCount();
+  }
+
+  Future<int> getStepCounts({DateTime? startDate, DateTime? endDate}) {
+    return StepsCountPlatform.instance.getStepCounts(
+      startDate: startDate,
+      endDate: endDate,
+    );
   }
 }
