@@ -76,8 +76,7 @@ class StepCountDatabase(context: Context) :
 
             if (rowId != -1L) {
                 Log.d(
-                    TAG,
-                    "Inserted $stepCount steps at ${TimeStampUtils.formatUtcTimestamp(timestamp)} UTC (ID: $rowId)"
+                    TAG, "Inserted $stepCount steps at $timestamp (ID: $rowId)"
                 )
             } else {
                 Log.e(TAG, "Failed to insert step count")
@@ -118,11 +117,8 @@ class StepCountDatabase(context: Context) :
                 totalSteps = cursor.getInt(0)
             }
             cursor.close()
-
-            val startDateTime = startDate?.let { TimeStampUtils.formatUtcTimestamp(it) + " UTC" }
-            val endDateTime = endDate?.let { TimeStampUtils.formatUtcTimestamp(it) + " UTC" }
             Log.d(
-                TAG, "Query result: $totalSteps steps (start: $startDateTime, end: $endDateTime)"
+                TAG, "Query result: $totalSteps steps (start: $startDate, end: $endDate)"
             )
             totalSteps
         } catch (e: Exception) {

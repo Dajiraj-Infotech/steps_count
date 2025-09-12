@@ -85,8 +85,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _updateFilteredStepCount() async {
     try {
       // Filtered step count
-      DateTime? startDate = _startDate?.toUtc();
-      DateTime? endDate = _endDate?.toUtc();
+      DateTime? startDate = _startDate;
+      DateTime? endDate = _endDate;
 
       // Apply time information if available
       if (_startDate != null && _startTime != null) {

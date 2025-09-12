@@ -112,10 +112,8 @@ class StepCountManager(context: Context) {
             try {
                 val utcTimestamp = TimeStampUtils.getCurrentUtcTimestamp()
                 database.insertStepCount(steps, utcTimestamp)
-
-                val utcTimestampFormated = TimeStampUtils.formatUtcTimestamp(utcTimestamp)
                 Log.d(
-                    TAG, "Saved $steps steps to database at $utcTimestampFormated (UTC)"
+                    TAG, "Saved $steps steps to database at $utcTimestamp (UTC)"
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save steps to database: ${e.message}")
@@ -131,10 +129,21 @@ class StepCountManager(context: Context) {
      */
     fun getStepCount(startDate: Long? = null, endDate: Long? = null): Int {
         return try {
-            val dbSteps = database.getStepCount(startDate, endDate)
-            Log.d(
-                TAG, "Step count query - Total: $dbSteps"
-            )
+            Log.d(TAG, "Filter Local Start TimeStamp: $startDate")
+            Log.d(TAG, "Filter Local End TimeStamp: $endDate")
+            var startUTCTimestamp: Long? = null
+            if (startDate != null) {
+                startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startDate)
+            }
+            var endUTCTimestamp: Long? = null
+            if (endDate != null) {
+                endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endDate)
+            }
+            Log.d(TAG, "Filter UTC Start TimeStamp: $startUTCTimestamp")
+            Log.d(TAG, "Filter UTC End TimeStamp: $endUTCTimestamp")
+
+            val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
+            Log.d(TAG, "Step count query - Total: $dbSteps")
             dbSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")
@@ -148,11 +157,20 @@ class StepCountManager(context: Context) {
      */
     fun getTodaysCount(): Int {
         return try {
-            val startTimestamp = TimeStampUtils.getTodaysStartTimestamp()
-            val endTimestamp = TimeStampUtils.getTodaysEndTimestamp()
+            val startLocalTimestamp = TimeStampUtils.getTodaysTimestamp(true)
+            val endLocalTimestamp = TimeStampUtils.getTodaysTimestamp(false)
+
+            Log.d(TAG, "Todays Local Start TimeStamp: $startLocalTimestamp")
+            Log.d(TAG, "Todays Local End TimeStamp: $endLocalTimestamp")
+
+            val startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startLocalTimestamp)
+            val endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endLocalTimestamp)
+
+            Log.d(TAG, "Todays UTC Start TimeStamp: $startUTCTimestamp")
+            Log.d(TAG, "Todays UTC End TimeStamp: $endUTCTimestamp")
 
             // Get steps from database for today's range
-            val dbSteps = database.getStepCount(startTimestamp, endTimestamp)
+            val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
 
             Log.d(TAG, "Today's step count - DB: $dbSteps, Total: $dbSteps")
             dbSteps
