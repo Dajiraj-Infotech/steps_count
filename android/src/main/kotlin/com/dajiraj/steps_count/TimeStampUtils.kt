@@ -44,5 +44,15 @@ class TimeStampUtils {
             return localZoned.withZoneSameInstant(ZoneId.of("UTC")).toInstant().toEpochMilli()
         }
 
+        /**
+         * Convert UTC timestamp to Local timestamp
+         * @param utcTimestamp UTC timestamp in milliseconds
+         * @return Local timestamp in milliseconds
+         */
+        fun convertUtcTimestampToLocal(utcTimestamp: Long): Long {
+            val zone = ZoneId.systemDefault()
+            val utcZoned = Instant.ofEpochMilli(utcTimestamp).atZone(ZoneId.of("UTC"))
+            return utcZoned.withZoneSameInstant(zone).toInstant().toEpochMilli()
+        }
     }
 }

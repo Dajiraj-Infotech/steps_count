@@ -181,6 +181,61 @@ class StepCountManager(context: Context) {
     }
 
     /**
+     * Get timeline data - list of step entries with timestamps
+     * @param startDate Start date in milliseconds (nullable - if null, no start limit)
+     * @param endDate End date in milliseconds (nullable - if null, no end limit)
+     * @param timeZone The timezone type for returned timestamps. Default is LOCAL.
+     * @return List of maps containing step_count and timestamp
+     */
+    fun getTimeline(
+        startDate: Long? = null, endDate: Long? = null, timeZone: TimeZoneType = TimeZoneType.LOCAL
+    ): List<Map<String, Any>> {
+        return try {
+            Log.d(TAG, "Timeline Filter Local Start TimeStamp: $startDate")
+            Log.d(TAG, "Timeline Filter Local End TimeStamp: $endDate")
+            Log.d(TAG, "Timeline Return TimeZone Type: $timeZone")
+            
+            // Convert input timestamps to UTC for database query (input timestamps are always treated as local time)
+            var startUTCTimestamp: Long? = null
+            if (startDate != null) {
+                startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startDate)
+            }
+            
+            var endUTCTimestamp: Long? = null
+            if (endDate != null) {
+                endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endDate)
+            }
+
+            Log.d(TAG, "Timeline Filter UTC Start TimeStamp: $startUTCTimestamp")
+            Log.d(TAG, "Timeline Filter UTC End TimeStamp: $endUTCTimestamp")
+
+            // Get timeline data from database (stored in UTC)
+            val dbTimelineData = database.getTimelineData(startUTCTimestamp, endUTCTimestamp)
+
+            // Convert timestamps in response based on requested format
+            val responseData = dbTimelineData.map { entry ->
+                val utcTimestamp = entry["timestamp"] as Long
+                val stepCount = entry["step_count"] as Int
+                val responseTimestamp = if (timeZone.isLocal) {
+                    TimeStampUtils.convertUtcTimestampToLocal(utcTimestamp)
+                } else {
+                    utcTimestamp // Keep as UTC
+                }
+
+                mapOf<String, Any>(
+                    "step_count" to stepCount, "timestamp" to responseTimestamp
+                )
+            }
+
+            Log.d(TAG, "Timeline query - Total entries: ${responseData.size}")
+            responseData
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting timeline data: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
      * Clean up resources
      */
     fun cleanup() {

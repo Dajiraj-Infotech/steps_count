@@ -55,6 +55,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "isServiceRunning" -> isServiceRunning(result)
             "getTodaysCount" -> getTodaysCount(result)
             "getStepCount" -> getStepCount(call, result)
+            "getTimeline" -> getTimeline(call, result)
             else -> result.notImplemented()
         }
     }
@@ -143,6 +144,21 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             result.success(stepCount)
         } catch (e: Exception) {
             result.error("STEP_COUNT_ERROR", "Failed to get step count: ${e.message}", null)
+        }
+    }
+
+    private fun getTimeline(call: MethodCall, result: Result) {
+        try {
+            // Extract parameters
+            val startDate = call.argument<Long>("startDate")
+            val endDate = call.argument<Long>("endDate")
+            val timeZone = TimeZoneType.fromString(call.argument<String>("timeZone"))
+
+            // Get timeline data from service
+            val timelineData = stepCountManager.getTimeline(startDate, endDate, timeZone)
+            result.success(timelineData)
+        } catch (e: Exception) {
+            result.error("TIMELINE_ERROR", "Failed to get timeline data: ${e.message}", null)
         }
     }
 

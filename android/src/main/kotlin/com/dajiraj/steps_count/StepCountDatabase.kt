@@ -128,6 +128,53 @@ class StepCountDatabase(context: Context) :
     }
 
     /**
+     * Get timeline data - list of step entries with timestamps
+     * @param startDate Start date in milliseconds (nullable)
+     * @param endDate End date in milliseconds (nullable)
+     * @return List of maps containing step_count and timestamp
+     */
+    fun getTimelineData(startDate: Long? = null, endDate: Long? = null): List<Map<String, Any>> {
+        return try {
+            val db = readableDatabase
+            val timelineData = mutableListOf<Map<String, Any>>()
+
+            // Build query based on date parameters
+            val (selection, selectionArgs) = buildDateQuery(startDate, endDate)
+
+            val cursor = db.query(
+                TABLE_STEPS,
+                arrayOf(COLUMN_STEP_COUNT, COLUMN_TIMESTAMP),
+                selection,
+                selectionArgs,
+                null,
+                null,
+                "$COLUMN_TIMESTAMP ASC" // Order by timestamp ascending
+            )
+
+            while (cursor.moveToNext()) {
+                val stepCount = cursor.getInt(0)
+                val timestamp = cursor.getLong(1)
+                
+                timelineData.add(
+                    mapOf(
+                        "step_count" to stepCount,
+                        "timestamp" to timestamp
+                    )
+                )
+            }
+            cursor.close()
+            
+            Log.d(
+                TAG, "Timeline query result: ${timelineData.size} entries (start: $startDate, end: $endDate)"
+            )
+            timelineData
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting timeline data: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
      * Build SQL query components for date filtering
      */
     private fun buildDateQuery(startDate: Long?, endDate: Long?): Pair<String?, Array<String>?> {

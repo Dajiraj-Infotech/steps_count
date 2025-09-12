@@ -1,4 +1,8 @@
 import 'steps_count_platform_interface.dart';
+import 'models/timeline_model.dart';
+import 'models/timezone_type.dart';
+export 'models/timeline_model.dart';
+export 'models/timezone_type.dart';
 
 class StepsCount {
   Future<void> startBackgroundService() {
@@ -21,6 +25,18 @@ class StepsCount {
     return StepsCountPlatform.instance.getStepCounts(
       startDate: startDate,
       endDate: endDate,
+    );
+  }
+
+  Future<List<TimelineModel>> getTimeline({
+    DateTime? startDate,
+    DateTime? endDate,
+    TimeZoneType timeZone = TimeZoneType.local,
+  }) {
+    return StepsCountPlatform.instance.getTimeline(
+      startDate: startDate,
+      endDate: endDate,
+      timeZone: timeZone,
     );
   }
 }
