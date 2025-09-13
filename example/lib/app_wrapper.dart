@@ -38,12 +38,13 @@ class _AppWrapperState extends State<AppWrapper> with WidgetsBindingObserver {
 
   Future<void> _checkPermissions() async {
     try {
-      final activityRecognitionStatus = await Permission.activityRecognition.status;
+      final activityRecognitionStatus =
+          await Permission.activityRecognition.status;
       final notificationStatus = await Permission.notification.status;
-      
-      final hasAllPermissions = activityRecognitionStatus.isGranted && 
-                               notificationStatus.isGranted;
-      
+
+      final hasAllPermissions =
+          activityRecognitionStatus.isGranted && notificationStatus.isGranted;
+
       if (mounted) {
         setState(() {
           _hasPermission = hasAllPermissions;
@@ -79,10 +80,7 @@ class _AppWrapperState extends State<AppWrapper> with WidgetsBindingObserver {
               SizedBox(height: 16),
               Text(
                 'Checking permissions...',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey,
-                ),
+                style: TextStyle(fontSize: 16, color: Colors.grey),
               ),
             ],
           ),
@@ -96,13 +94,16 @@ class _AppWrapperState extends State<AppWrapper> with WidgetsBindingObserver {
         return FadeTransition(
           opacity: animation,
           child: SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0.0, 0.1),
-              end: Offset.zero,
-            ).animate(CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOutCubic,
-            )),
+            position:
+                Tween<Offset>(
+                  begin: const Offset(0.0, 0.1),
+                  end: Offset.zero,
+                ).animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
             child: child,
           ),
         );
