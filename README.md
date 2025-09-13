@@ -5,7 +5,7 @@ A Flutter plugin for counting steps and managing background step tracking servic
 ## Preview
 
 <p align="center">
-  <img src="preview/steps_count.png" alt="Steps Count Plugin Preview" width="300"/>
+  <img src="preview/steps_count.png" alt="Steps Count Plugin Preview" width="500"/>
 </p>
 
 ## Features
