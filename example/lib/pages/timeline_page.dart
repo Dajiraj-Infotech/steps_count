@@ -26,6 +26,7 @@ class _TimelinePageState extends State<TimelinePage> {
   List<TimelineModel> _timelineData = [];
   bool _isLoading = true;
   String? _errorMessage;
+  TimeZoneType _selectedTimeZone = TimeZoneType.local;
 
   @override
   void initState() {
@@ -66,6 +67,7 @@ class _TimelinePageState extends State<TimelinePage> {
         title: const Text('Timeline'),
         centerTitle: true,
         forceMaterialTransparency: true,
+        actions: [_buildTimezoneToggle(), const SizedBox(width: 8)],
       ),
       body: SafeArea(child: _buildBody()),
     );
@@ -205,7 +207,10 @@ class _TimelinePageState extends State<TimelinePage> {
 
   Widget _buildTimelineItem(int index) {
     final timeline = _timelineData[index];
-    final formattedDate = _timelineService.formatDisplayDate(timeline.dateTime);
+    final formattedDate = _timelineService.formatDisplayDateWithTimezone(
+      timeline.getDateTime(_selectedTimeZone),
+      _selectedTimeZone,
+    );
     final totalSteps = _timelineService.getTotalStepsForDate(
       _timelineData,
       timeline.timestamp,
@@ -248,19 +253,53 @@ class _TimelinePageState extends State<TimelinePage> {
                     ),
                     const SizedBox(width: 6),
                     Expanded(
-                      child: Text(
-                        formattedDate,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.blue.shade800,
-                        ),
+                      child: Row(
+                        children: [
+                          Text(
+                            formattedDate,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.blue.shade800,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _selectedTimeZone == TimeZoneType.local
+                                  ? Colors.green.shade100
+                                  : Colors.orange.shade100,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: _selectedTimeZone == TimeZoneType.local
+                                    ? Colors.green.shade300
+                                    : Colors.orange.shade300,
+                              ),
+                            ),
+                            child: Text(
+                              _selectedTimeZone == TimeZoneType.local
+                                  ? 'LOCAL'
+                                  : 'UTC',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: _selectedTimeZone == TimeZoneType.local
+                                    ? Colors.green.shade700
+                                    : Colors.orange.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-      
+
                 // Steps info
                 Row(
                   children: [
@@ -331,7 +370,7 @@ class _TimelinePageState extends State<TimelinePage> {
               ],
             ),
           ),
-      
+
           // Steps badge
           Container(
             padding: const EdgeInsets.all(12),
@@ -497,16 +536,139 @@ class _TimelinePageState extends State<TimelinePage> {
     );
   }
 
+  Widget _buildTimezoneToggle() {
+    return PopupMenuButton<TimeZoneType>(
+      initialValue: _selectedTimeZone,
+      onSelected: (TimeZoneType value) {
+        setState(() {
+          _selectedTimeZone = value;
+        });
+        _loadTimelineData();
+      },
+      itemBuilder: (BuildContext context) => [
+        PopupMenuItem<TimeZoneType>(
+          value: TimeZoneType.local,
+          child: Row(
+            children: [
+              Icon(
+                Icons.location_on_rounded,
+                size: 20,
+                color: _selectedTimeZone == TimeZoneType.local
+                    ? Colors.green.shade600
+                    : Colors.grey.shade600,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Local Time',
+                style: TextStyle(
+                  fontWeight: _selectedTimeZone == TimeZoneType.local
+                      ? FontWeight.w600
+                      : FontWeight.normal,
+                  color: _selectedTimeZone == TimeZoneType.local
+                      ? Colors.green.shade700
+                      : Colors.black87,
+                ),
+              ),
+              if (_selectedTimeZone == TimeZoneType.local) ...[
+                const Spacer(),
+                Icon(
+                  Icons.check_rounded,
+                  size: 20,
+                  color: Colors.green.shade600,
+                ),
+              ],
+            ],
+          ),
+        ),
+        PopupMenuItem<TimeZoneType>(
+          value: TimeZoneType.utc,
+          child: Row(
+            children: [
+              Icon(
+                Icons.public_rounded,
+                size: 20,
+                color: _selectedTimeZone == TimeZoneType.utc
+                    ? Colors.orange.shade600
+                    : Colors.grey.shade600,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'UTC Time',
+                style: TextStyle(
+                  fontWeight: _selectedTimeZone == TimeZoneType.utc
+                      ? FontWeight.w600
+                      : FontWeight.normal,
+                  color: _selectedTimeZone == TimeZoneType.utc
+                      ? Colors.orange.shade700
+                      : Colors.black87,
+                ),
+              ),
+              if (_selectedTimeZone == TimeZoneType.utc) ...[
+                const Spacer(),
+                Icon(
+                  Icons.check_rounded,
+                  size: 20,
+                  color: Colors.orange.shade600,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.blue.shade100,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.blue.shade300),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _selectedTimeZone == TimeZoneType.local
+                  ? Icons.location_on_rounded
+                  : Icons.public_rounded,
+              size: 16,
+              color: Colors.blue.shade700,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              _selectedTimeZone == TimeZoneType.local ? 'Local' : 'UTC',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.blue.shade700,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              Icons.arrow_drop_down_rounded,
+              size: 16,
+              color: Colors.blue.shade700,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _getDateRangeText() {
     if (widget.startDate == null && widget.endDate == null) {
       return 'All available data';
     }
 
     final start = widget.startDate != null
-        ? _timelineService.formatDisplayDate(widget.startDate!)
+        ? _timelineService.formatDisplayDateWithTimezone(
+            widget.startDate!,
+            _selectedTimeZone,
+          )
         : 'Beginning';
     final end = widget.endDate != null
-        ? _timelineService.formatDisplayDate(widget.endDate!)
+        ? _timelineService.formatDisplayDateWithTimezone(
+            widget.endDate!,
+            _selectedTimeZone,
+          )
         : 'Now';
 
     return '$start - $end';

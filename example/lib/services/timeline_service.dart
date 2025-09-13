@@ -67,4 +67,15 @@ class TimelineService {
     final dateFormat = DateFormat('dd/MM/yyyy hh:mm:ss a');
     return dateFormat.format(date);
   }
+
+  /// Formats date for display with timezone support
+  String formatDisplayDateWithTimezone(DateTime date, TimeZoneType timeZone) {
+    final dateFormat = DateFormat('dd/MM/yyyy hh:mm:ss a');
+    switch (timeZone) {
+      case TimeZoneType.local:
+        return dateFormat.format(date);
+      case TimeZoneType.utc:
+        return dateFormat.format(date.toUtc());
+    }
+  }
 }
