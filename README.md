@@ -2,6 +2,12 @@
 
 A Flutter plugin for counting steps and managing background step tracking services on Android devices. This plugin provides comprehensive step counting functionality with background service support, timeline data retrieval, and robust permission handling.
 
+## Preview
+
+<p align="center">
+  <img src="preview/steps_count.jpg" alt="Steps Count Plugin Preview" width="300"/>
+</p>
+
 ## Features
 
 - 🚶 **Step Counting**: Get real-time step counts and historical data
