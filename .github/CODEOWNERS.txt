@@ -1,0 +1,25 @@
+# Global code ownership
+# This file defines who owns the code in this repository
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repository
+* @kumarpalsinh25
+
+# Specific ownership for different parts of the project
+# Android native code
+/android/ @kumarpalsinh25
+
+# Flutter/Dart code
+/lib/ @kumarpalsinh25
+
+# Example app
+/example/ @kumarpalsinh25
+
+# Documentation and configuration
+*.md @kumarpalsinh25
+*.yaml @kumarpalsinh25
+*.yml @kumarpalsinh25
+
+# Build and configuration files
+/pubspec.yaml @kumarpalsinh25
+/analysis_options.yaml @kumarpalsinh25
