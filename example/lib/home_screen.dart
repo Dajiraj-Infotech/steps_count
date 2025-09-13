@@ -86,29 +86,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _updateFilteredStepCount() async {
     try {
       // Filtered step count
-      DateTime? startDate = _startDate;
-      DateTime? endDate = _endDate;
-
-      // Apply time information if available
-      if (_startDate != null && _startTime != null) {
-        startDate = DateTime(
-          _startDate!.year,
-          _startDate!.month,
-          _startDate!.day,
-          _startTime!.hour,
-          _startTime!.minute,
-        );
-      }
-
-      if (_endDate != null && _endTime != null) {
-        endDate = DateTime(
-          _endDate!.year,
-          _endDate!.month,
-          _endDate!.day,
-          _endTime!.hour,
-          _endTime!.minute,
-        );
-      }
+      DateTime? startDate = AppUtils.applyTimeToDate(_startDate, _startTime);
+      DateTime? endDate = AppUtils.applyTimeToDate(_endDate, _endTime);
 
       _stepCount = await _stepsCounterPlugin.getStepCounts(
         startDate: startDate,
@@ -175,14 +154,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _navigateToTimeline() {
+    // Filtered step count
+    DateTime? startDate = AppUtils.applyTimeToDate(_startDate, _startTime);
+    DateTime? endDate = AppUtils.applyTimeToDate(_endDate, _endTime);
+    
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => TimelinePage(
-          startDate: _startDate,
-          endDate: _endDate,
-          startTime: _startTime,
-          endTime: _endTime,
-        ),
+        builder: (context) =>
+            TimelinePage(startDate: startDate, endDate: endDate),
       ),
     );
   }

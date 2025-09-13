@@ -13,41 +13,14 @@ class TimelineService {
   Future<List<TimelineModel>> getTimelineData({
     DateTime? startDate,
     DateTime? endDate,
-    TimeOfDay? startTime,
-    TimeOfDay? endTime,
     TimeZoneType timeZone = TimeZoneType.local,
   }) async {
     try {
-      // Apply time information if available
-      DateTime? effectiveStartDate = startDate;
-      DateTime? effectiveEndDate = endDate;
-
-      if (startDate != null && startTime != null) {
-        effectiveStartDate = DateTime(
-          startDate.year,
-          startDate.month,
-          startDate.day,
-          startTime.hour,
-          startTime.minute,
-        );
-      }
-
-      if (endDate != null && endTime != null) {
-        effectiveEndDate = DateTime(
-          endDate.year,
-          endDate.month,
-          endDate.day,
-          endTime.hour,
-          endTime.minute,
-        );
-      }
-
       final timeline = await _stepsCountPlugin.getTimeline(
-        startDate: effectiveStartDate,
-        endDate: effectiveEndDate,
+        startDate: startDate,
+        endDate: endDate,
         timeZone: timeZone,
       );
-
       return timeline.reversed.toList();
     } catch (e) {
       debugPrint('Error fetching timeline data: $e');

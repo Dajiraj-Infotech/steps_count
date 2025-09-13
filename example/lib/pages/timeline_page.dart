@@ -6,16 +6,8 @@ import 'package:steps_count_example/services/timeline_service.dart';
 class TimelinePage extends StatefulWidget {
   final DateTime? startDate;
   final DateTime? endDate;
-  final TimeOfDay? startTime;
-  final TimeOfDay? endTime;
 
-  const TimelinePage({
-    super.key,
-    this.startDate,
-    this.endDate,
-    this.startTime,
-    this.endTime,
-  });
+  const TimelinePage({super.key, this.startDate, this.endDate});
 
   @override
   State<TimelinePage> createState() => _TimelinePageState();
@@ -39,13 +31,11 @@ class _TimelinePageState extends State<TimelinePage> {
       _isLoading = true;
       _errorMessage = null;
     });
-
+    
     try {
       final timelineData = await _timelineService.getTimelineData(
         startDate: widget.startDate,
         endDate: widget.endDate,
-        startTime: widget.startTime,
-        endTime: widget.endTime,
       );
 
       setState(() {

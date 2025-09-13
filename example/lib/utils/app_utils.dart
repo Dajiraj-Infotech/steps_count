@@ -52,4 +52,9 @@ class AppUtils {
       initialTime: initialTime ?? TimeOfDay.now(),
     );
   }
+
+  static DateTime? applyTimeToDate(DateTime? date, TimeOfDay? time) {
+    if (date == null || time == null) return date;
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
 }
