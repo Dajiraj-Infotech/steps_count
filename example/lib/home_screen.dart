@@ -157,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Filtered step count
     DateTime? startDate = AppUtils.applyTimeToDate(_startDate, _startTime);
     DateTime? endDate = AppUtils.applyTimeToDate(_endDate, _endTime);
-    
+
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) =>

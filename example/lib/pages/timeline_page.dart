@@ -31,7 +31,7 @@ class _TimelinePageState extends State<TimelinePage> {
       _isLoading = true;
       _errorMessage = null;
     });
-    
+
     try {
       final timelineData = await _timelineService.getTimelineData(
         startDate: widget.startDate,
