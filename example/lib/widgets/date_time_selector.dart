@@ -207,7 +207,7 @@ class DateTimeSelector extends StatelessWidget {
       _showDateRequiredMessage(context, 'Start Date');
       return;
     }
-    
+
     final picked = await AppUtils.selectTime(
       context: context,
       initialTime: startTime,
@@ -223,7 +223,7 @@ class DateTimeSelector extends StatelessWidget {
       _showDateRequiredMessage(context, 'End Date');
       return;
     }
-    
+
     final picked = await AppUtils.selectTime(
       context: context,
       initialTime: endTime,
@@ -322,19 +322,23 @@ class DateTimeSelector extends StatelessWidget {
                 Icon(
                   Icons.access_time,
                   size: 16,
-                  color: isEnabled ? Colors.blue.shade600 : Colors.grey.shade400,
+                  color: isEnabled
+                      ? Colors.blue.shade600
+                      : Colors.grey.shade400,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    time != null 
-                        ? AppUtils.formatTime(time) 
+                    time != null
+                        ? AppUtils.formatTime(time)
                         : (isEnabled ? 'Select time' : 'Select date first'),
                     style: TextStyle(
                       fontSize: 14,
                       color: time != null
                           ? Colors.black87
-                          : (isEnabled ? Colors.grey.shade600 : Colors.grey.shade500),
+                          : (isEnabled
+                                ? Colors.grey.shade600
+                                : Colors.grey.shade500),
                     ),
                   ),
                 ),
