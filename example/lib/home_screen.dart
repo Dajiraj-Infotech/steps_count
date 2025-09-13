@@ -5,6 +5,7 @@ import 'package:steps_count_example/utils/app_utils.dart';
 import 'package:steps_count_example/widgets/common_button.dart';
 import 'package:steps_count_example/widgets/date_time_selector.dart';
 import 'package:steps_count_example/widgets/step_count_card.dart';
+import 'package:steps_count_example/pages/timeline_page.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -173,6 +174,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _updateFilteredStepCount();
   }
 
+  void _navigateToTimeline() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => TimelinePage(
+          startDate: _startDate,
+          endDate: _endDate,
+          startTime: _startTime,
+          endTime: _endTime,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -193,14 +207,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return SafeArea(
       child: SingleChildScrollView(
         child: Padding(
-          padding: const EdgeInsets.all(20.0),
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _buildTodayCountContainer(),
-              const SizedBox(height: 20),
+              const SizedBox(height: 15),
               _buildDateSelectionSection(),
-              const SizedBox(height: 20),
+              const SizedBox(height: 15),
               _buildServiceRequestBtn(),
             ],
           ),
@@ -259,13 +273,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _buildFilterCountContainer() {
     final bool isFiltered = _startDate != null || _endDate != null;
-    return StepCountCard(
-      title: isFiltered ? 'Filtered Steps' : 'All Time Steps',
-      subtitle: isFiltered ? 'Custom date range' : 'Total recorded steps',
-      stepCount: _stepCount,
-      icon: isFiltered ? Icons.filter_list_rounded : Icons.timeline_rounded,
-      primaryColor: Colors.blue,
-      shadowColor: Colors.blue,
+    return Column(
+      children: [
+        StepCountCard(
+          title: isFiltered ? 'Filtered Steps' : 'All Time Steps',
+          subtitle: isFiltered ? 'Custom date range' : 'Total recorded steps',
+          stepCount: _stepCount,
+          icon: isFiltered ? Icons.filter_list_rounded : Icons.timeline_rounded,
+          primaryColor: Colors.blue,
+          shadowColor: Colors.blue,
+        ),
+        const SizedBox(height: 10),
+        _buildTimelineButton(),
+      ],
+    );
+  }
+
+  Widget _buildTimelineButton() {
+    return CommonButton(
+      label: 'Show Timeline',
+      icon: Icons.timeline_rounded,
+      onPressed: _navigateToTimeline,
+      primaryColor: Colors.purple.shade500,
+      shadowColor: Colors.purple,
+      isEnabled: true,
     );
   }
 
