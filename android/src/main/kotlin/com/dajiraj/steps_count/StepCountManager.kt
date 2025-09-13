@@ -112,10 +112,8 @@ class StepCountManager(context: Context) {
             try {
                 val utcTimestamp = TimeStampUtils.getCurrentUtcTimestamp()
                 database.insertStepCount(steps, utcTimestamp)
-
-                val utcTimestampFormated = TimeStampUtils.formatUtcTimestamp(utcTimestamp)
                 Log.d(
-                    TAG, "Saved $steps steps to database at $utcTimestampFormated (UTC)"
+                    TAG, "Saved $steps steps to database at $utcTimestamp (UTC)"
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save steps to database: ${e.message}")
@@ -131,10 +129,21 @@ class StepCountManager(context: Context) {
      */
     fun getStepCount(startDate: Long? = null, endDate: Long? = null): Int {
         return try {
-            val dbSteps = database.getStepCount(startDate, endDate)
-            Log.d(
-                TAG, "Step count query - Total: $dbSteps"
-            )
+            Log.d(TAG, "Filter Local Start TimeStamp: $startDate")
+            Log.d(TAG, "Filter Local End TimeStamp: $endDate")
+            var startUTCTimestamp: Long? = null
+            if (startDate != null) {
+                startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startDate)
+            }
+            var endUTCTimestamp: Long? = null
+            if (endDate != null) {
+                endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endDate)
+            }
+            Log.d(TAG, "Filter UTC Start TimeStamp: $startUTCTimestamp")
+            Log.d(TAG, "Filter UTC End TimeStamp: $endUTCTimestamp")
+
+            val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
+            Log.d(TAG, "Step count query - Total: $dbSteps")
             dbSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")
@@ -148,17 +157,81 @@ class StepCountManager(context: Context) {
      */
     fun getTodaysCount(): Int {
         return try {
-            val startTimestamp = TimeStampUtils.getTodaysStartTimestamp()
-            val endTimestamp = TimeStampUtils.getTodaysEndTimestamp()
+            val startLocalTimestamp = TimeStampUtils.getTodaysTimestamp(true)
+            val endLocalTimestamp = TimeStampUtils.getTodaysTimestamp(false)
+
+            Log.d(TAG, "Todays Local Start TimeStamp: $startLocalTimestamp")
+            Log.d(TAG, "Todays Local End TimeStamp: $endLocalTimestamp")
+
+            val startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startLocalTimestamp)
+            val endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endLocalTimestamp)
+
+            Log.d(TAG, "Todays UTC Start TimeStamp: $startUTCTimestamp")
+            Log.d(TAG, "Todays UTC End TimeStamp: $endUTCTimestamp")
 
             // Get steps from database for today's range
-            val dbSteps = database.getStepCount(startTimestamp, endTimestamp)
+            val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
 
             Log.d(TAG, "Today's step count - DB: $dbSteps, Total: $dbSteps")
             dbSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting today's step count: ${e.message}")
             0 // Return 0 if DB query fails
+        }
+    }
+
+    /**
+     * Get timeline data - list of step entries with timestamps
+     * @param startDate Start date in milliseconds (nullable - if null, no start limit)
+     * @param endDate End date in milliseconds (nullable - if null, no end limit)
+     * @param timeZone The timezone type for returned timestamps. Default is LOCAL.
+     * @return List of maps containing step_count and timestamp
+     */
+    fun getTimeline(
+        startDate: Long? = null, endDate: Long? = null, timeZone: TimeZoneType = TimeZoneType.LOCAL
+    ): List<Map<String, Any>> {
+        return try {
+            Log.d(TAG, "Timeline Filter Local Start TimeStamp: $startDate")
+            Log.d(TAG, "Timeline Filter Local End TimeStamp: $endDate")
+            Log.d(TAG, "Timeline Return TimeZone Type: $timeZone")
+            
+            // Convert input timestamps to UTC for database query (input timestamps are always treated as local time)
+            var startUTCTimestamp: Long? = null
+            if (startDate != null) {
+                startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startDate)
+            }
+            
+            var endUTCTimestamp: Long? = null
+            if (endDate != null) {
+                endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endDate)
+            }
+
+            Log.d(TAG, "Timeline Filter UTC Start TimeStamp: $startUTCTimestamp")
+            Log.d(TAG, "Timeline Filter UTC End TimeStamp: $endUTCTimestamp")
+
+            // Get timeline data from database (stored in UTC)
+            val dbTimelineData = database.getTimelineData(startUTCTimestamp, endUTCTimestamp)
+
+            // Convert timestamps in response based on requested format
+            val responseData = dbTimelineData.map { entry ->
+                val utcTimestamp = entry["timestamp"] as Long
+                val stepCount = entry["step_count"] as Int
+                val responseTimestamp = if (timeZone.isLocal) {
+                    TimeStampUtils.convertUtcTimestampToLocal(utcTimestamp)
+                } else {
+                    utcTimestamp // Keep as UTC
+                }
+
+                mapOf<String, Any>(
+                    "step_count" to stepCount, "timestamp" to responseTimestamp
+                )
+            }
+
+            Log.d(TAG, "Timeline query - Total entries: ${responseData.size}")
+            responseData
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting timeline data: ${e.message}")
+            emptyList()
         }
     }
 

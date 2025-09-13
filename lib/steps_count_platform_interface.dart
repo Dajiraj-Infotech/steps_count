@@ -1,6 +1,8 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'steps_count_method_channel.dart';
+import 'models/timeline_model.dart';
+import 'models/timezone_type.dart';
 
 abstract class StepsCountPlatform extends PlatformInterface {
   /// Constructs a StepsCountPlatform.
@@ -35,15 +37,23 @@ abstract class StepsCountPlatform extends PlatformInterface {
     );
   }
 
-  Future<int> getStepCount({DateTime? startDate, DateTime? endDate}) {
-    throw UnimplementedError('getStepCount() has not been implemented.');
-  }
-
   Future<bool> isServiceRunning() {
     throw UnimplementedError('isServiceRunning() has not been implemented.');
   }
 
   Future<int> getTodaysCount() {
     throw UnimplementedError('getTodaysCount() has not been implemented.');
+  }
+
+  Future<int> getStepCounts({DateTime? startDate, DateTime? endDate}) {
+    throw UnimplementedError('getStepCount() has not been implemented.');
+  }
+
+  Future<List<TimelineModel>> getTimeline({
+    DateTime? startDate,
+    DateTime? endDate,
+    TimeZoneType timeZone = TimeZoneType.local,
+  }) {
+    throw UnimplementedError('getTimeline() has not been implemented.');
   }
 }

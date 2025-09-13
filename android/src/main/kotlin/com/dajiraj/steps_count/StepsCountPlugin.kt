@@ -53,8 +53,9 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "startBackgroundService" -> startBackgroundService(result)
             "stopBackgroundService" -> stopBackgroundService(result)
             "isServiceRunning" -> isServiceRunning(result)
-            "getStepCount" -> getStepCount(call, result)
             "getTodaysCount" -> getTodaysCount(result)
+            "getStepCount" -> getStepCount(call, result)
+            "getTimeline" -> getTimeline(call, result)
             else -> result.notImplemented()
         }
     }
@@ -122,6 +123,16 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
+    private fun getTodaysCount(result: Result) {
+        try {
+            // Get today's step count from service
+            val todaysCount = stepCountManager.getTodaysCount()
+            result.success(todaysCount)
+        } catch (e: Exception) {
+            result.error("TODAYS_COUNT_ERROR", "Failed to get today's count: ${e.message}", null)
+        }
+    }
+
     private fun getStepCount(call: MethodCall, result: Result) {
         try {
             // Extract date parameters if provided
@@ -136,13 +147,18 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
-    private fun getTodaysCount(result: Result) {
+    private fun getTimeline(call: MethodCall, result: Result) {
         try {
-            // Get today's step count from service
-            val todaysCount = stepCountManager.getTodaysCount()
-            result.success(todaysCount)
+            // Extract parameters
+            val startDate = call.argument<Long>("startDate")
+            val endDate = call.argument<Long>("endDate")
+            val timeZone = TimeZoneType.fromString(call.argument<String>("timeZone"))
+
+            // Get timeline data from service
+            val timelineData = stepCountManager.getTimeline(startDate, endDate, timeZone)
+            result.success(timelineData)
         } catch (e: Exception) {
-            result.error("TODAYS_COUNT_ERROR", "Failed to get today's count: ${e.message}", null)
+            result.error("TIMELINE_ERROR", "Failed to get timeline data: ${e.message}", null)
         }
     }
 

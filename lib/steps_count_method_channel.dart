@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'steps_count_platform_interface.dart';
+import 'models/timeline_model.dart';
+import 'models/timezone_type.dart';
 
 /// An implementation of [StepsCountPlatform] that uses method channels.
 class MethodChannelStepsCount extends StepsCountPlatform {
@@ -20,25 +22,6 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   }
 
   @override
-  Future<int> getStepCount({DateTime? startDate, DateTime? endDate}) async {
-    final Map<String, dynamic> arguments = {};
-    
-    if (startDate != null) {
-      arguments['startDate'] = startDate.millisecondsSinceEpoch;
-    }
-    
-    if (endDate != null) {
-      arguments['endDate'] = endDate.millisecondsSinceEpoch;
-    }
-    
-    final result = await methodChannel.invokeMethod<int>(
-      'getStepCount', 
-      arguments.isEmpty ? null : arguments
-    );
-    return result ?? 0;
-  }
-
-  @override
   Future<bool> isServiceRunning() async {
     final result = await methodChannel.invokeMethod<bool>('isServiceRunning');
     return result ?? false;
@@ -48,5 +31,61 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   Future<int> getTodaysCount() async {
     final result = await methodChannel.invokeMethod<int>('getTodaysCount');
     return result ?? 0;
+  }
+
+  @override
+  Future<int> getStepCounts({DateTime? startDate, DateTime? endDate}) async {
+    final Map<String, dynamic> arguments = {};
+
+    if (startDate != null) {
+      arguments['startDate'] = startDate.millisecondsSinceEpoch;
+    }
+
+    if (endDate != null) {
+      arguments['endDate'] = endDate.millisecondsSinceEpoch;
+    }
+
+    final result = await methodChannel.invokeMethod<int>(
+      'getStepCount',
+      arguments.isEmpty ? null : arguments,
+    );
+    return result ?? 0;
+  }
+
+  @override
+  Future<List<TimelineModel>> getTimeline({
+    DateTime? startDate,
+    DateTime? endDate,
+    TimeZoneType timeZone = TimeZoneType.local,
+  }) async {
+    final Map<String, dynamic> arguments = {
+      'timeZone': timeZone.name.toLowerCase(), // Send enum as string
+    };
+
+    if (startDate != null) {
+      arguments['startDate'] = startDate.millisecondsSinceEpoch;
+    }
+
+    if (endDate != null) {
+      arguments['endDate'] = endDate.millisecondsSinceEpoch;
+    }
+
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'getTimeline',
+      arguments,
+    );
+
+    if (result == null) {
+      return [];
+    }
+
+    // Convert the result to List<TimelineModel>
+    return result.map((item) {
+      if (item is Map) {
+        return TimelineModel.fromMap(Map<String, dynamic>.from(item));
+      }
+      // Return empty TimelineModel if item is not a Map
+      return const TimelineModel(stepCount: 0, timestamp: 0);
+    }).toList();
   }
 }

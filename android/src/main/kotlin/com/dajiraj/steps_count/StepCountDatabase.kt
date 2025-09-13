@@ -76,8 +76,7 @@ class StepCountDatabase(context: Context) :
 
             if (rowId != -1L) {
                 Log.d(
-                    TAG,
-                    "Inserted $stepCount steps at ${TimeStampUtils.formatUtcTimestamp(timestamp)} UTC (ID: $rowId)"
+                    TAG, "Inserted $stepCount steps at $timestamp (ID: $rowId)"
                 )
             } else {
                 Log.e(TAG, "Failed to insert step count")
@@ -118,16 +117,60 @@ class StepCountDatabase(context: Context) :
                 totalSteps = cursor.getInt(0)
             }
             cursor.close()
-
-            val startDateTime = startDate?.let { TimeStampUtils.formatUtcTimestamp(it) + " UTC" }
-            val endDateTime = endDate?.let { TimeStampUtils.formatUtcTimestamp(it) + " UTC" }
             Log.d(
-                TAG, "Query result: $totalSteps steps (start: $startDateTime, end: $endDateTime)"
+                TAG, "Query result: $totalSteps steps (start: $startDate, end: $endDate)"
             )
             totalSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")
             0
+        }
+    }
+
+    /**
+     * Get timeline data - list of step entries with timestamps
+     * @param startDate Start date in milliseconds (nullable)
+     * @param endDate End date in milliseconds (nullable)
+     * @return List of maps containing step_count and timestamp
+     */
+    fun getTimelineData(startDate: Long? = null, endDate: Long? = null): List<Map<String, Any>> {
+        return try {
+            val db = readableDatabase
+            val timelineData = mutableListOf<Map<String, Any>>()
+
+            // Build query based on date parameters
+            val (selection, selectionArgs) = buildDateQuery(startDate, endDate)
+
+            val cursor = db.query(
+                TABLE_STEPS,
+                arrayOf(COLUMN_STEP_COUNT, COLUMN_TIMESTAMP),
+                selection,
+                selectionArgs,
+                null,
+                null,
+                "$COLUMN_TIMESTAMP ASC" // Order by timestamp ascending
+            )
+
+            while (cursor.moveToNext()) {
+                val stepCount = cursor.getInt(0)
+                val timestamp = cursor.getLong(1)
+                
+                timelineData.add(
+                    mapOf(
+                        "step_count" to stepCount,
+                        "timestamp" to timestamp
+                    )
+                )
+            }
+            cursor.close()
+            
+            Log.d(
+                TAG, "Timeline query result: ${timelineData.size} entries (start: $startDate, end: $endDate)"
+            )
+            timelineData
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting timeline data: ${e.message}")
+            emptyList()
         }
     }
 
