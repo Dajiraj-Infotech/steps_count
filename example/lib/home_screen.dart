@@ -37,6 +37,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _stepsChannel.setMethodCallHandler(_methodHandler);
+    setInitDateTimeForIOS();
     _initializeApp();
   }
 
@@ -65,6 +66,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _updateFilteredStepCount();
     _isInitialized = true;
     setState(() {});
+  }
+
+  void setInitDateTimeForIOS() {
+    if (!Platform.isIOS) return;
+    _startDate = DateTime.now().subtract(const Duration(days: 7));
+    _endDate = DateTime.now();
+    _startTime = TimeOfDay(hour: 0, minute: 0);
+    _endTime = TimeOfDay(hour: 23, minute: 59);
   }
 
   Future<void> _checkServiceStatus() async {
