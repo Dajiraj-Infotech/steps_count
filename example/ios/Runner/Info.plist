@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSHealthShareUsageDescription</key>
+	<string>This app needs access to HealthKit data to track your steps, distance, and other health metrics.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>This app needs permission to write health data to HealthKit to record your activity and health information.</string>
 </dict>
 </plist>
