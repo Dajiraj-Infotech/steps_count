@@ -185,12 +185,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Steps Count'),
-        centerTitle: true,
-        forceMaterialTransparency: true,
-      ),
+      appBar: _buildAppBar(),
       body: _isInitialized ? _buildBody() : _buildLoading(),
+    );
+  }
+
+  AppBar _buildAppBar() {
+    return AppBar(
+      title: const Text('Steps Count'),
+      centerTitle: true,
+      forceMaterialTransparency: true,
+      actions: [
+        IconButton(
+          onPressed: () {
+            _updateTodayStepCount();
+            _updateFilteredStepCount();
+          },
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
     );
   }
 
