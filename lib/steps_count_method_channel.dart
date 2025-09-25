@@ -147,17 +147,4 @@ class MethodChannelStepsCount extends StepsCountPlatform {
 
     return result ?? false;
   }
-
-  @override
-  Future<List<String>> getAvailableDataTypes() async {
-    final result = await methodChannel.invokeMethod<List<dynamic>>(
-      'getAvailableDataTypes',
-    );
-
-    if (result == null) {
-      return [];
-    }
-
-    return result.cast<String>();
-  }
 }

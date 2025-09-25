@@ -25,7 +25,10 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         case "checkSingleHealthKitPermissionStatus":
             handleCheckSinglePermissionStatus(call: call, result: result)
             
-        case "getStepCounts":
+        case "getTodaysCount":
+            handleGetTodaysCount(call: call, result: result)
+
+        case "getStepCount":
             handleGetStepCount(call: call, result: result)
             
         default:
@@ -81,24 +84,50 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
     }
     
     // MARK: - Data Retrieval Methods    
+    private func handleGetTodaysCount(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        healthKitManager.getTodaysCount() { stepCount, error in
+            if let error = error {
+                result(
+                    FlutterError(
+                        code: "DATA_ERROR", 
+                        message: error, 
+                        details: nil
+                    )
+                )
+            } else {
+                result(stepCount ?? 0)
+            }
+        }
+    }
+
     private func handleGetStepCount(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let arguments = call.arguments as? [String: Any],
-              let startDateMs = arguments["startDate"] as? Int64,
-              let endDateMs = arguments["endDate"] as? Int64 else {
-            result(FlutterError(code: "INVALID_ARGUMENTS", 
-                              message: "startDate and endDate parameters are required and must be timestamps in milliseconds", 
-                              details: nil))
+        let arguments = call.arguments as? NSDictionary
+        let startDate = (arguments?["startDate"] as? NSNumber)?.doubleValue ?? 0
+        let endDate = (arguments?["endDate"] as? NSNumber)?.doubleValue ?? 0
+        guard startDate > 0 && endDate > 0 else {
+            result(
+                FlutterError(
+                    code: "INVALID_ARGUMENTS", 
+                    message: "startDate and endDate parameters are required and must be timestamps in milliseconds", 
+                    details: nil
+                )
+            )
             return
         }
         
-        let startDate = Date(timeIntervalSince1970: TimeInterval(startDateMs) / 1000.0)
-        let endDate = Date(timeIntervalSince1970: TimeInterval(endDateMs) / 1000.0)
+        // Convert dates from milliseconds to Date()
+        let dateFrom = HealthUtilities.dateFromMilliseconds(startDate)
+        let dateTo = HealthUtilities.dateFromMilliseconds(endDate)
         
-        healthKitManager.getStepCount(from: startDate, to: endDate) { stepCount, error in
+        healthKitManager.getStepCount(from: dateFrom, to: dateTo) { stepCount, error in
             if let error = error {
-                result(FlutterError(code: "DATA_ERROR", 
-                                  message: error, 
-                                  details: nil))
+                result(
+                    FlutterError(
+                        code: "DATA_ERROR", 
+                        message: error, 
+                        details: nil
+                    )
+                )
             } else {
                 result(stepCount ?? 0)
             }

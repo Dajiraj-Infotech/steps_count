@@ -87,10 +87,4 @@ abstract class StepsCountPlatform extends PlatformInterface {
       'checkSingleHealthKitPermissionStatus() has not been implemented.',
     );
   }
-
-  Future<List<String>> getAvailableDataTypes() {
-    throw UnimplementedError(
-      'getAvailableDataTypes() has not been implemented.',
-    );
-  }
 }

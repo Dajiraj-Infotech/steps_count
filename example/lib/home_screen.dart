@@ -97,12 +97,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         endDate: endDate,
       );
       debugPrint('Filtered step count: $_stepCount');
-      if (!mounted) return;
-      setState(() {});
     } catch (e) {
       // Silently handle step count errors to avoid spam
+      _stepCount = 0;
       debugPrint('Error updating step count: $e');
     }
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _startService() async {

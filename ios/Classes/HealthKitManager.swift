@@ -99,7 +99,7 @@ public class HealthKitManager: NSObject {
     }
     
     // MARK: - Data Retrieval
-    public func getStepCount(from startDate: Date, to endDate: Date, completion: @escaping (Double?, String?) -> Void) {
+    public func getStepCount(from startDate: Date, to endDate: Date, completion: @escaping (Int?, String?) -> Void) {
         guard let stepCountType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
             completion(nil, "Step count type not available")
             return
@@ -107,9 +107,11 @@ public class HealthKitManager: NSObject {
         
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         
-        let query = HKStatisticsQuery(quantityType: stepCountType,
-                                    quantitySamplePredicate: predicate,
-                                    options: .cumulativeSum) { _, result, error in
+        let query = HKStatisticsQuery(
+            quantityType: stepCountType,
+            quantitySamplePredicate: predicate,
+            options: .cumulativeSum
+        ) { _, result, error in
             DispatchQueue.main.async {
                 if let error = error {
                     completion(nil, error.localizedDescription)
@@ -122,11 +124,28 @@ public class HealthKitManager: NSObject {
                     return
                 }
                 
-                let stepCount = sum.doubleValue(for: HKUnit.count())
+                let stepCount = Int(sum.doubleValue(for: HKUnit.count()))
                 completion(stepCount, nil)
             }
         }
         
         healthStore.execute(query)
+    }
+    
+    public func getTodaysCount(completion: @escaping (Int?, String?) -> Void) {
+        let calendar = Calendar.current
+        let now = Date()
+        
+        guard let startOfDay = calendar.startOfDay(for: now) as Date? else {
+            completion(nil, "Failed to get start of day")
+            return
+        }
+        
+        guard let endOfDay = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: now) else {
+            completion(nil, "Failed to get end of day")
+            return
+        }
+        
+        getStepCount(from: startOfDay, to: endOfDay, completion: completion)
     }
 }
