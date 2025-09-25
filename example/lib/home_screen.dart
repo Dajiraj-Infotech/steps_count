@@ -101,6 +101,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       DateTime? startDate = AppUtils.applyTimeToDate(_startDate, _startTime);
       DateTime? endDate = AppUtils.applyTimeToDate(_endDate, _endTime);
 
+      // In IOS, if startDate and endDate are not set, it will throw an error
+      // So we need to set the default values for IOS
+      // In Android, if startDate and endDate are not set, it will all steps in the database
       _stepCount = await _stepsCounterPlugin.getStepCounts(
         startDate: startDate,
         endDate: endDate,
