@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'steps_count_platform_interface.dart';
 import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
+import 'models/health_data_type.dart';
 
 /// An implementation of [StepsCountPlatform] that uses method channels.
 class MethodChannelStepsCount extends StepsCountPlatform {
@@ -87,5 +88,76 @@ class MethodChannelStepsCount extends StepsCountPlatform {
       // Return empty TimelineModel if item is not a Map
       return const TimelineModel(stepCount: 0, timestamp: 0);
     }).toList();
+  }
+
+  @override
+  Future<bool> isHealthKitAvailable() async {
+    final result = await methodChannel.invokeMethod<bool>('isHealthKitAvailable');
+    return result ?? false;
+  }
+
+  @override
+  Future<bool> requestHealthKitPermissions({
+    required List<HealthDataType> dataTypes,
+  }) async {
+    final arguments = {
+      'dataTypes': dataTypes.map((type) => type.identifier).toList(),
+    };
+
+    final result = await methodChannel.invokeMethod<bool>(
+      'requestHealthKitPermissions',
+      arguments,
+    );
+    return result ?? false;
+  }
+
+  @override
+  Future<Map<String, bool>> checkHealthKitPermissionStatus({
+    required List<HealthDataType> dataTypes,
+  }) async {
+    final arguments = {
+      'dataTypes': dataTypes.map((type) => type.identifier).toList(),
+    };
+
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+      'checkHealthKitPermissionStatus',
+      arguments,
+    );
+
+    if (result == null) {
+      return {};
+    }
+
+    // Convert the result to Map<String, bool>
+    return Map<String, bool>.from(result);
+  }
+
+  @override
+  Future<bool> checkSingleHealthKitPermissionStatus({
+    required HealthDataType dataType,
+  }) async {
+    final arguments = {
+      'dataType': dataType.identifier,
+    };
+
+    final result = await methodChannel.invokeMethod<bool>(
+      'checkSingleHealthKitPermissionStatus',
+      arguments,
+    );
+
+    return result ?? false;
+  }
+
+  @override
+  Future<List<String>> getAvailableDataTypes() async {
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'getAvailableDataTypes',
+    );
+
+    if (result == null) {
+      return [];
+    }
+
+    return result.cast<String>();
   }
 }

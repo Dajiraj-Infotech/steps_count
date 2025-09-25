@@ -5,62 +5,35 @@ public class HealthKitManager: NSObject {
     private let healthStore = HKHealthStore()
     
     // MARK: - HealthKit Availability
-    
     public static func isHealthKitAvailable() -> Bool {
         return HKHealthStore.isHealthDataAvailable()
     }
     
-    // MARK: - Permission Types
-    public enum HealthDataType: String, CaseIterable {
-        case stepCount = "stepCount"
-        case distanceWalkingRunning = "distanceWalkingRunning"
-        case activeEnergyBurned = "activeEnergyBurned"
-        
-        var hkQuantityType: HKQuantityType? {
-            switch self {
-            case .stepCount:
-                return HKQuantityType.quantityType(forIdentifier: .stepCount)
-            case .distanceWalkingRunning:
-                return HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)
-            case .activeEnergyBurned:
-                return HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)
-            default:
-                return nil
-            }
-        }
-        
-        var hkObjectType: HKObjectType? {
-            if let quantityType = hkQuantityType {
-                return quantityType
-            } else if let categoryType = hkCategoryType {
-                return categoryType
-            } else if let workoutType = hkWorkoutType {
-                return workoutType
-            }
+    // MARK: - Health Data Type Mapping
+    /// Maps Flutter health data type strings to HealthKit types
+    private func getHKQuantityType(for identifier: String) -> HKQuantityType? {
+        switch identifier {
+        case "stepCount":
+            return HKQuantityType.quantityType(forIdentifier: .stepCount)
+        case "distanceWalkingRunning":
+            return HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)
+        case "activeEnergyBurned":
+            return HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)
+        default:
             return nil
         }
     }
     
-    // MARK: - Permission Status
-    public enum PermissionStatus: String {
-        case notDetermined = "notDetermined"
-        case denied = "denied"
-        case authorized = "authorized"
-        case restricted = "restricted"
-        case unknown = "unknown"
-        
-        init(from hkAuthorizationStatus: HKAuthorizationStatus) {
-            switch hkAuthorizationStatus {
-            case .notDetermined:
-                self = .notDetermined
-            case .sharingDenied:
-                self = .denied
-            case .sharingAuthorized:
-                self = .authorized
-            @unknown default:
-                self = .unknown
-            }
+    private func getHKObjectType(for identifier: String) -> HKObjectType? {
+        if let quantityType = getHKQuantityType(for: identifier) {
+            return quantityType
         }
+        return nil
+    }
+    
+    // MARK: - Permission Status Helper
+    private func isAuthorized(status: HKAuthorizationStatus) -> Bool {
+        return status == .sharingAuthorized
     }
     
     // MARK: - Permission Request
@@ -74,8 +47,7 @@ public class HealthKitManager: NSObject {
         var writeTypes = Set<HKSampleType>()
         
         for dataTypeString in dataTypes {
-            guard let dataType = HealthDataType(rawValue: dataTypeString),
-                  let hkObjectType = dataType.hkObjectType else {
+            guard let hkObjectType = getHKObjectType(for: dataTypeString) else {
                 completion(false, "Invalid data type: \(dataTypeString)")
                 return
             }
@@ -100,34 +72,30 @@ public class HealthKitManager: NSObject {
     }
     
     // MARK: - Permission Check  
-    public func checkPermissionStatus(for dataTypes: [String]) -> [String: String] {
-        var permissionStatuses: [String: String] = [:]
+    public func checkPermissionStatus(for dataTypes: [String]) -> [String: Bool] {
+        var permissions: [String: Bool] = [:]
         
         for dataTypeString in dataTypes {
-            guard let dataType = HealthDataType(rawValue: dataTypeString),
-                  let hkObjectType = dataType.hkObjectType else {
-                permissionStatuses[dataTypeString] = PermissionStatus.unknown.rawValue
+            guard let hkObjectType = getHKObjectType(for: dataTypeString) else {
+                permissions[dataTypeString] = false
                 continue
             }
             
             let authStatus = healthStore.authorizationStatus(for: hkObjectType)
-            let permissionStatus = PermissionStatus(from: authStatus)
-            permissionStatuses[dataTypeString] = permissionStatus.rawValue
+            permissions[dataTypeString] = isAuthorized(status: authStatus)
         }
         
-        return permissionStatuses
+        return permissions
     }
     
     // MARK: - Single Permission Check
-    public func checkPermissionStatus(for dataType: String) -> String {
-        guard let healthDataType = HealthDataType(rawValue: dataType),
-              let hkObjectType = healthDataType.hkObjectType else {
-            return PermissionStatus.unknown.rawValue
+    public func checkSinglePermissionStatus(for dataType: String) -> Bool {
+        guard let hkObjectType = getHKObjectType(for: dataType) else {
+            return false
         }
         
         let authStatus = healthStore.authorizationStatus(for: hkObjectType)
-        let permissionStatus = PermissionStatus(from: authStatus)
-        return permissionStatus.rawValue
+        return isAuthorized(status: authStatus)
     }
     
     // MARK: - Data Retrieval
@@ -160,10 +128,5 @@ public class HealthKitManager: NSObject {
         }
         
         healthStore.execute(query)
-    }
-    
-    // MARK: - Available Data Types
-    public static func getAvailableDataTypes() -> [String] {
-        return HealthDataType.allCases.map { $0.rawValue }
     }
 }

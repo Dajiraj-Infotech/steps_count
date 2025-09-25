@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:steps_count/steps_count.dart';
@@ -66,6 +68,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkServiceStatus() async {
+    if (!Platform.isAndroid) return;
     _isServiceRunning = await _stepsCounterPlugin.isServiceRunning();
     setState(() {});
   }
@@ -280,6 +283,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildServiceRequestBtn() {
+    if (!Platform.isAndroid) return const SizedBox.shrink();
     return Row(
       children: [
         Expanded(

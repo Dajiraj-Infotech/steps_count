@@ -16,19 +16,16 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         case "isHealthKitAvailable":
             result(HealthKitManager.isHealthKitAvailable())
             
-        case "requestPermissions":
+        case "requestHealthKitPermissions":
             handleRequestPermissions(call: call, result: result)
             
-        case "checkPermissionStatus":
+        case "checkHealthKitPermissionStatus":
             handleCheckPermissionStatus(call: call, result: result)
             
-        case "checkSinglePermissionStatus":
+        case "checkSingleHealthKitPermissionStatus":
             handleCheckSinglePermissionStatus(call: call, result: result)
             
-        case "getAvailableDataTypes":
-            result(HealthKitManager.getAvailableDataTypes())
-            
-        case "getStepCount":
+        case "getStepCounts":
             handleGetStepCount(call: call, result: result)
             
         default:
@@ -66,8 +63,8 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        let statuses = healthKitManager.checkPermissionStatus(for: dataTypes)
-        result(statuses)
+        let permissions = healthKitManager.checkPermissionStatus(for: dataTypes)
+        result(permissions)
     }
     
     private func handleCheckSinglePermissionStatus(call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -79,8 +76,8 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        let status = healthKitManager.checkPermissionStatus(for: dataType)
-        result(status)
+        let isAuthorized = healthKitManager.checkSinglePermissionStatus(for: dataType)
+        result(isAuthorized)
     }
     
     // MARK: - Data Retrieval Methods    
