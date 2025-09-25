@@ -148,4 +148,60 @@ public class HealthKitManager: NSObject {
         
         getStepCount(from: startOfDay, to: endOfDay, completion: completion)
     }
+    
+    // MARK: - Timeline Data Retrieval
+    public func getTimeline(from startDate: Date, to endDate: Date, completion: @escaping ([[String: Any]]?, String?) -> Void) {
+        guard let stepCountType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
+            completion(nil, "Step count type not available")
+            return
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        let calendar = Calendar.current
+        
+        // Create interval components for hourly data
+        var interval = DateComponents()
+        interval.hour = 1
+        
+        let query = HKStatisticsCollectionQuery(
+            quantityType: stepCountType,
+            quantitySamplePredicate: predicate,
+            options: .cumulativeSum,
+            anchorDate: startDate,
+            intervalComponents: interval
+        )
+        
+        query.initialResultsHandler = { _, results, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(nil, error.localizedDescription)
+                    return
+                }
+                
+                guard let results = results else {
+                    completion([], nil)
+                    return
+                }
+                
+                var timelineData: [[String: Any]] = []
+                results.enumerateStatistics(from: startDate, to: endDate) { statistics, _ in
+                    let stepCount = statistics.sumQuantity()?.doubleValue(for: HKUnit.count()) ?? 0
+                    
+                    // Only add entries where step count is not 0
+                    if stepCount > 0 {
+                        let timestamp = Int(statistics.startDate.timeIntervalSince1970 * 1000) // Convert to milliseconds
+                        
+                        let entry: [String: Any] = [
+                            "step_count": Int(stepCount),
+                            "timestamp": timestamp
+                        ]
+                        timelineData.append(entry)
+                    }
+                }         
+                completion(timelineData, nil)
+            }
+        }
+        
+        healthStore.execute(query)
+    }
 }

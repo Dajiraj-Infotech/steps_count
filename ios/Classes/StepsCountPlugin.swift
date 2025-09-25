@@ -31,6 +31,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         case "getStepCount":
             handleGetStepCount(call: call, result: result)
             
+        case "getTimeline":
+            handleGetTimeline(call: call, result: result)
+            
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -130,6 +133,41 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
                 )
             } else {
                 result(stepCount ?? 0)
+            }
+        }
+    }
+    
+    private func handleGetTimeline(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        let arguments = call.arguments as? NSDictionary
+        let startDate = (arguments?["startDate"] as? NSNumber)?.doubleValue ?? 0
+        let endDate = (arguments?["endDate"] as? NSNumber)?.doubleValue ?? 0
+        
+        guard startDate > 0 && endDate > 0 else {
+            result(
+                FlutterError(
+                    code: "INVALID_ARGUMENTS", 
+                    message: "startDate and endDate parameters are required and must be timestamps in milliseconds", 
+                    details: nil
+                )
+            )
+            return
+        }
+        
+        // Convert dates from milliseconds to Date()
+        let dateFrom = HealthUtilities.dateFromMilliseconds(startDate)
+        let dateTo = HealthUtilities.dateFromMilliseconds(endDate)
+        
+        healthKitManager.getTimeline(from: dateFrom, to: dateTo) { timelineData, error in
+            if let error = error {
+                result(
+                    FlutterError(
+                        code: "DATA_ERROR", 
+                        message: error, 
+                        details: nil
+                    )
+                )
+            } else {
+                result(timelineData ?? [])
             }
         }
     }
