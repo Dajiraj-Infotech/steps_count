@@ -9,6 +9,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         let channel = FlutterMethodChannel(name: "steps_count", binaryMessenger: registrar.messenger())
         let instance = StepsCountPlugin()
         registrar.addMethodCallDelegate(instance, channel: channel)
+        HealthKitStepObserver.shared.startObserving(callback: {
+            channel.invokeMethod("onSensorChanged", arguments: nil)
+        })
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
