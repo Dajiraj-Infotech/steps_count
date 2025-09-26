@@ -92,7 +92,9 @@ class MethodChannelStepsCount extends StepsCountPlatform {
 
   @override
   Future<bool> isHealthKitAvailable() async {
-    final result = await methodChannel.invokeMethod<bool>('isHealthKitAvailable');
+    final result = await methodChannel.invokeMethod<bool>(
+      'isHealthKitAvailable',
+    );
     return result ?? false;
   }
 
@@ -136,9 +138,7 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   Future<bool> checkSingleHealthKitPermissionStatus({
     required HealthDataType dataType,
   }) async {
-    final arguments = {
-      'dataType': dataType.identifier,
-    };
+    final arguments = {'dataType': dataType.identifier};
 
     final result = await methodChannel.invokeMethod<bool>(
       'checkSingleHealthKitPermissionStatus',
