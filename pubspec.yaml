@@ -1,6 +1,6 @@
 name: steps_count
 description: "A Flutter plugin for counting steps and managing background step tracking services on Android devices."
-version: 0.0.1
+version: 0.0.2
 homepage: https://www.dajiraj.com
 repository: https://github.com/Dajiraj-Infotech/steps_count
 issue_tracker: https://github.com/Dajiraj-Infotech/steps_count/issues
