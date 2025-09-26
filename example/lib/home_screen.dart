@@ -195,15 +195,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       title: const Text('Steps Count'),
       centerTitle: true,
       forceMaterialTransparency: true,
-      actions: [
-        IconButton(
-          onPressed: () {
-            _updateTodayStepCount();
-            _updateFilteredStepCount();
-          },
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
     );
   }
 
