@@ -1,8 +1,10 @@
 import 'steps_count_platform_interface.dart';
 import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
+import 'models/health_data_type.dart';
 export 'models/timeline_model.dart';
 export 'models/timezone_type.dart';
+export 'models/health_data_type.dart';
 
 /// A Flutter plugin for counting steps and managing background step tracking services.
 ///
@@ -126,6 +128,105 @@ class StepsCount {
       startDate: startDate,
       endDate: endDate,
       timeZone: timeZone,
+    );
+  }
+
+  /// Checks if HealthKit is available on the device.
+  ///
+  /// Returns `true` if HealthKit is available, `false` otherwise.
+  ///
+  /// This can be useful to check if HealthKit can be used for step counting.
+  Future<bool> isHealthKitAvailable() {
+    return StepsCountPlatform.instance.isHealthKitAvailable();
+  }
+
+  /// Requests HealthKit permissions for the specified health data types.
+  ///
+  /// This method prompts the user to grant permissions for accessing the
+  /// specified health data types. The user will see a system dialog where
+  /// they can choose which data types to allow or deny.
+  ///
+  /// Parameters:
+  /// - [dataTypes]: List of health data types to request permissions for.
+  ///
+  /// Returns `true` if the permission request was successfully initiated,
+  /// `false` otherwise. Note that this doesn't indicate whether permissions
+  /// were granted - use [checkHealthKitPermissionStatus] to verify the actual
+  /// permission status after requesting.
+  Future<bool> requestHealthKitPermissions({
+    required List<HealthDataType> dataTypes,
+  }) {
+    return StepsCountPlatform.instance.requestHealthKitPermissions(
+      dataTypes: dataTypes,
+    );
+  }
+
+  /// Checks the permission status for multiple health data types.
+  ///
+  /// This method returns the current permission status for each of the
+  /// specified health data types without prompting the user.
+  ///
+  /// Parameters:
+  /// - [dataTypes]: List of health data types to check permissions for.
+  ///
+  /// Returns a map where keys are data type identifiers and values are
+  /// boolean indicating whether permission is granted (true) or not (false).
+  ///
+  /// Example:
+  /// ```dart
+  /// final permissions = await stepsCount.checkHealthKitPermissionStatus(
+  ///   dataTypes: [
+  ///     HealthDataType.stepCount,
+  ///     HealthDataType.distanceWalkingRunning,
+  ///   ],
+  /// );
+  ///
+  /// for (final entry in permissions.entries) {
+  ///   print('${entry.key}: ${entry.value ? "Authorized" : "Not Authorized"}');
+  ///   if (entry.value) {
+  ///     print('✓ Access granted for ${entry.key}');
+  ///   }
+  /// }
+  /// ```
+  Future<Map<String, bool>> checkHealthKitPermissionStatus({
+    required List<HealthDataType> dataTypes,
+  }) {
+    return StepsCountPlatform.instance.checkHealthKitPermissionStatus(
+      dataTypes: dataTypes,
+    );
+  }
+
+  /// Checks the permission status for a single health data type.
+  ///
+  /// This is a convenience method for checking the permission status of
+  /// just one health data type.
+  ///
+  /// Parameters:
+  /// - [dataType]: The health data type to check permission for.
+  ///
+  /// Returns `true` if permission is granted, `false` otherwise.
+  ///
+  /// Example:
+  /// ```dart
+  /// final hasStepPermission = await stepsCount.checkSingleHealthKitPermissionStatus(
+  ///   dataType: HealthDataType.stepCount,
+  /// );
+  ///
+  /// if (hasStepPermission) {
+  ///   final steps = await stepsCount.getTodaysCount();
+  ///   print('Today\'s steps: $steps');
+  /// } else {
+  ///   // Request permission
+  ///   await stepsCount.requestHealthKitPermissions(
+  ///     dataTypes: [HealthDataType.stepCount],
+  ///   );
+  /// }
+  /// ```
+  Future<bool> checkSingleHealthKitPermissionStatus({
+    required HealthDataType dataType,
+  }) {
+    return StepsCountPlatform.instance.checkSingleHealthKitPermissionStatus(
+      dataType: dataType,
     );
   }
 }

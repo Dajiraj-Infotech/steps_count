@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:steps_count/steps_count.dart';
@@ -35,6 +37,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _stepsChannel.setMethodCallHandler(_methodHandler);
+    setInitDateTimeForIOS();
     _initializeApp();
   }
 
@@ -65,7 +68,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() {});
   }
 
+  void setInitDateTimeForIOS() {
+    if (!Platform.isIOS) return;
+    _startDate = DateTime.now().subtract(const Duration(days: 7));
+    _endDate = DateTime.now();
+    _startTime = TimeOfDay(hour: 0, minute: 0);
+    _endTime = TimeOfDay(hour: 23, minute: 59);
+  }
+
   Future<void> _checkServiceStatus() async {
+    if (!Platform.isAndroid) return;
     _isServiceRunning = await _stepsCounterPlugin.isServiceRunning();
     setState(() {});
   }
@@ -89,17 +101,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       DateTime? startDate = AppUtils.applyTimeToDate(_startDate, _startTime);
       DateTime? endDate = AppUtils.applyTimeToDate(_endDate, _endTime);
 
+      // In IOS, if startDate and endDate are not set, it will throw an error
+      // So we need to set the default values for IOS
+      // In Android, if startDate and endDate are not set, it will all steps in the database
       _stepCount = await _stepsCounterPlugin.getStepCounts(
         startDate: startDate,
         endDate: endDate,
       );
       debugPrint('Filtered step count: $_stepCount');
-      if (!mounted) return;
-      setState(() {});
     } catch (e) {
       // Silently handle step count errors to avoid spam
+      _stepCount = 0;
       debugPrint('Error updating step count: $e');
     }
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _startService() async {
@@ -169,12 +185,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Steps Count'),
-        centerTitle: true,
-        forceMaterialTransparency: true,
-      ),
+      appBar: _buildAppBar(),
       body: _isInitialized ? _buildBody() : _buildLoading(),
+    );
+  }
+
+  AppBar _buildAppBar() {
+    return AppBar(
+      title: const Text('Steps Count'),
+      centerTitle: true,
+      forceMaterialTransparency: true,
     );
   }
 
@@ -280,6 +300,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildServiceRequestBtn() {
+    if (!Platform.isAndroid) return const SizedBox.shrink();
     return Row(
       children: [
         Expanded(

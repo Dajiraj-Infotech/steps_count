@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:steps_count/steps_count.dart';
 import 'package:steps_count_example/utils/app_utils.dart';
 import 'package:steps_count_example/widgets/common_button.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class PermissionScreen extends StatefulWidget {
   final VoidCallback onPermissionGranted;
@@ -18,6 +22,7 @@ class _PermissionScreenState extends State<PermissionScreen>
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _fadeAnimation;
+  final _stepsCounterPlugin = StepsCount();
 
   @override
   void initState() {
@@ -44,33 +49,57 @@ class _PermissionScreenState extends State<PermissionScreen>
     super.dispose();
   }
 
+  Future<bool> checkHealthKitPermission() async {
+    final isAuthorized = await _stepsCounterPlugin
+        .checkSingleHealthKitPermissionStatus(
+          dataType: HealthDataType.stepCount,
+        );
+    return isAuthorized;
+  }
+
   Future<void> _requestPermissions() async {
     setState(() => _isLoading = true);
-
     try {
-      // Request both permissions
-      final Map<Permission, PermissionStatus> statuses = await [
-        Permission.activityRecognition,
-        Permission.notification,
-      ].request();
-
-      if (!mounted) return;
-
-      final activityStatus = statuses[Permission.activityRecognition]!;
-      final notificationStatus = statuses[Permission.notification]!;
-
-      if (activityStatus.isPermanentlyDenied ||
-          notificationStatus.isPermanentlyDenied) {
-        _showPermanentlyDeniedDialog();
-      } else if (activityStatus.isGranted && notificationStatus.isGranted) {
-        AppUtils.showSnackBar(context, 'Permissions granted successfully!');
-        widget.onPermissionGranted();
+      if (Platform.isIOS) {
+        final requestResult = await _stepsCounterPlugin
+            .requestHealthKitPermissions(dataTypes: [HealthDataType.stepCount]);
+        final isAuthorized = await checkHealthKitPermission();
+        if (!mounted) return;
+        if (requestResult && isAuthorized) {
+          AppUtils.showSnackBar(context, 'Permissions granted successfully!');
+          widget.onPermissionGranted();
+        } else if (requestResult && !isAuthorized) {
+          await showHealthPermissionDialog();
+          final isAuthorized = await checkHealthKitPermission();
+          if (isAuthorized) widget.onPermissionGranted();
+        } else {
+          AppUtils.showSnackBar(context, 'Permissions denied!');
+        }
       } else {
-        AppUtils.showSnackBar(
-          context,
-          'Some permissions were denied. Please try again.',
-          color: Colors.orange,
-        );
+        // Request both permissions
+        final Map<Permission, PermissionStatus> statuses = await [
+          Permission.activityRecognition,
+          Permission.notification,
+        ].request();
+
+        if (!mounted) return;
+
+        final activityStatus = statuses[Permission.activityRecognition]!;
+        final notificationStatus = statuses[Permission.notification]!;
+
+        if (activityStatus.isPermanentlyDenied ||
+            notificationStatus.isPermanentlyDenied) {
+          _showPermanentlyDeniedDialog();
+        } else if (activityStatus.isGranted && notificationStatus.isGranted) {
+          AppUtils.showSnackBar(context, 'Permissions granted successfully!');
+          widget.onPermissionGranted();
+        } else {
+          AppUtils.showSnackBar(
+            context,
+            'Some permissions were denied. Please try again.',
+            color: Colors.orange,
+          );
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -124,6 +153,49 @@ class _PermissionScreenState extends State<PermissionScreen>
         ],
       ),
     );
+  }
+
+  Future<void> showHealthPermissionDialog() async {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Permissions Required'),
+        content: const Text(
+          'To sync your steps with Apple Health:\n\n'
+          '1. Open the Health app\n'
+          '2. Tap your Avatar in the top right corner\n'
+          '3. Go to Apps in Privacy section\n'
+          '4. Find this app and enable "Turn On all"',
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await openHealthApp();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: const Text('Open Health App'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> openHealthApp() async {
+    final Uri uri = Uri.parse("x-apple-health://");
+
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      throw "Could not open Apple Health app";
+    }
   }
 
   @override
@@ -204,21 +276,31 @@ class _PermissionScreenState extends State<PermissionScreen>
   Widget _buildPermissionCards() {
     return Column(
       children: [
-        _buildPermissionCard(
-          icon: Icons.directions_walk_rounded,
-          title: 'Activity Recognition',
-          description:
-              'Allows the app to detect your physical activity and count steps',
-          color: Colors.green,
-        ),
-        const SizedBox(height: 16),
-        _buildPermissionCard(
-          icon: Icons.notifications_active_rounded,
-          title: 'Notifications',
-          description:
-              'Shows step count updates and service status notifications',
-          color: Colors.orange,
-        ),
+        if (Platform.isIOS) ...[
+          _buildPermissionCard(
+            icon: Icons.favorite_rounded,
+            title: 'Allow Apple Health',
+            description:
+                'We use Apple Health to ensure smooth step counting experience',
+            color: Colors.pink.shade400,
+          ),
+        ] else ...[
+          _buildPermissionCard(
+            icon: Icons.directions_walk_rounded,
+            title: 'Activity Recognition',
+            description:
+                'Allows the app to detect your physical activity and count steps',
+            color: Colors.green,
+          ),
+          const SizedBox(height: 16),
+          _buildPermissionCard(
+            icon: Icons.notifications_active_rounded,
+            title: 'Notifications',
+            description:
+                'Shows step count updates and service status notifications',
+            color: Colors.orange,
+          ),
+        ],
       ],
     );
   }

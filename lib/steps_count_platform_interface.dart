@@ -3,6 +3,7 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'steps_count_method_channel.dart';
 import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
+import 'models/health_data_type.dart';
 
 abstract class StepsCountPlatform extends PlatformInterface {
   /// Constructs a StepsCountPlatform.
@@ -55,5 +56,35 @@ abstract class StepsCountPlatform extends PlatformInterface {
     TimeZoneType timeZone = TimeZoneType.local,
   }) {
     throw UnimplementedError('getTimeline() has not been implemented.');
+  }
+
+  Future<bool> isHealthKitAvailable() {
+    throw UnimplementedError(
+      'isHealthKitAvailable() has not been implemented.',
+    );
+  }
+
+  Future<bool> requestHealthKitPermissions({
+    required List<HealthDataType> dataTypes,
+  }) {
+    throw UnimplementedError(
+      'requestHealthKitPermissions() has not been implemented.',
+    );
+  }
+
+  Future<Map<String, bool>> checkHealthKitPermissionStatus({
+    required List<HealthDataType> dataTypes,
+  }) {
+    throw UnimplementedError(
+      'checkHealthKitPermissionStatus() has not been implemented.',
+    );
+  }
+
+  Future<bool> checkSingleHealthKitPermissionStatus({
+    required HealthDataType dataType,
+  }) {
+    throw UnimplementedError(
+      'checkSingleHealthKitPermissionStatus() has not been implemented.',
+    );
   }
 }

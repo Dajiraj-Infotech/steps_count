@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:steps_count/steps_count.dart';
 import 'package:steps_count_example/home_screen.dart';
 import 'package:steps_count_example/widgets/permission_screen.dart';
 
@@ -13,6 +16,7 @@ class AppWrapper extends StatefulWidget {
 class _AppWrapperState extends State<AppWrapper> with WidgetsBindingObserver {
   bool _hasPermission = false;
   bool _isCheckingPermissions = true;
+  final _stepsCounterPlugin = StepsCount();
 
   @override
   void initState() {
@@ -38,18 +42,32 @@ class _AppWrapperState extends State<AppWrapper> with WidgetsBindingObserver {
 
   Future<void> _checkPermissions() async {
     try {
-      final activityRecognitionStatus =
-          await Permission.activityRecognition.status;
-      final notificationStatus = await Permission.notification.status;
+      if (Platform.isIOS) {
+        final isAuthorized = await _stepsCounterPlugin
+            .checkSingleHealthKitPermissionStatus(
+              dataType: HealthDataType.stepCount,
+            );
 
-      final hasAllPermissions =
-          activityRecognitionStatus.isGranted && notificationStatus.isGranted;
+        if (mounted) {
+          setState(() {
+            _hasPermission = isAuthorized;
+            _isCheckingPermissions = false;
+          });
+        }
+      } else {
+        final activityRecognitionStatus =
+            await Permission.activityRecognition.status;
+        final notificationStatus = await Permission.notification.status;
 
-      if (mounted) {
-        setState(() {
-          _hasPermission = hasAllPermissions;
-          _isCheckingPermissions = false;
-        });
+        final hasAllPermissions =
+            activityRecognitionStatus.isGranted && notificationStatus.isGranted;
+
+        if (mounted) {
+          setState(() {
+            _hasPermission = hasAllPermissions;
+            _isCheckingPermissions = false;
+          });
+        }
       }
     } catch (e) {
       debugPrint('Error checking permissions: $e');
