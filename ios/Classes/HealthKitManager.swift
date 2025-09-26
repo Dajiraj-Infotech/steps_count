@@ -106,31 +106,28 @@ public class HealthKitManager: NSObject {
         }
         
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
-        
-        let query = HKStatisticsQuery(
-            quantityType: stepCountType,
-            quantitySamplePredicate: predicate,
-            options: .cumulativeSum
-        ) { _, result, error in
+
+        let query = HKSampleQuery(sampleType: stepCountType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
             DispatchQueue.main.async {
                 if let error = error {
                     completion(nil, error.localizedDescription)
                     return
                 }
-                
-                guard let result = result,
-                      let sum = result.sumQuantity() else {
+                guard let samples = samples as? [HKQuantitySample] else {
                     completion(0, nil)
                     return
                 }
                 
-                let stepCount = Int(sum.doubleValue(for: HKUnit.count()))
-                completion(stepCount, nil)
+                let totalSteps = samples.reduce(0) { sum, sample in
+                    sum + Int(sample.quantity.doubleValue(for: HKUnit.count()))
+                }
+                completion(totalSteps, nil)
             }
         }
-        
+
         healthStore.execute(query)
     }
+
     
     public func getTodaysCount(completion: @escaping (Int?, String?) -> Void) {
         let calendar = Calendar.current
@@ -155,53 +152,42 @@ public class HealthKitManager: NSObject {
             completion(nil, "Step count type not available")
             return
         }
-        
+
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
-        let calendar = Calendar.current
-        
-        // Create interval components for hourly data
-        var interval = DateComponents()
-        interval.hour = 1
-        
-        let query = HKStatisticsCollectionQuery(
-            quantityType: stepCountType,
-            quantitySamplePredicate: predicate,
-            options: .cumulativeSum,
-            anchorDate: startDate,
-            intervalComponents: interval
-        )
-        
-        query.initialResultsHandler = { _, results, error in
+
+        let query = HKSampleQuery(
+            sampleType: stepCountType, 
+            predicate: predicate, 
+            limit: HKObjectQueryNoLimit, 
+            sortDescriptors: nil
+        ) { query, samples, error in
             DispatchQueue.main.async {
                 if let error = error {
                     completion(nil, error.localizedDescription)
                     return
                 }
-                
-                guard let results = results else {
+
+                guard let samples = samples as? [HKQuantitySample] else {
                     completion([], nil)
                     return
                 }
-                
+
                 var timelineData: [[String: Any]] = []
-                results.enumerateStatistics(from: startDate, to: endDate) { statistics, _ in
-                    let stepCount = statistics.sumQuantity()?.doubleValue(for: HKUnit.count()) ?? 0
-                    
-                    // Only add entries where step count is not 0
-                    if stepCount > 0 {
-                        let timestamp = Int(statistics.startDate.timeIntervalSince1970 * 1000) // Convert to milliseconds
-                        
-                        let entry: [String: Any] = [
-                            "step_count": Int(stepCount),
-                            "timestamp": timestamp
-                        ]
-                        timelineData.append(entry)
-                    }
-                }         
+
+                for sample in samples {
+                    let stepCount = sample.quantity.doubleValue(for: HKUnit.count())
+                    let timestamp = Int(sample.startDate.timeIntervalSince1970 * 1000)
+
+                    timelineData.append([
+                        "step_count": Int(stepCount),
+                        "timestamp": timestamp
+                    ])
+                }
+
                 completion(timelineData, nil)
             }
         }
-        
+
         healthStore.execute(query)
     }
 }
