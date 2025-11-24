@@ -78,14 +78,33 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 action = "START_SERVICE"
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+                Log.d(TAG, "Background service start requested")
+                result.success(true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start foreground service", e)
+                when {
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && 
+                    e.javaClass.simpleName == "ForegroundServiceStartNotAllowedException" -> {
+                        result.error(
+                            "FOREGROUND_SERVICE_ERROR",
+                            "Cannot start foreground service from background on Android 12+. " +
+                            "Please ensure the app is in the foreground when starting the service.",
+                            e.message
+                        )
+                    }
+                    else -> {
+                        result.error("SERVICE_START_ERROR", "Failed to start service: ${e.message}", null)
+                    }
+                }
             }
-
-            result.success(true)
         } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error in startBackgroundService", e)
             result.error("SERVICE_ERROR", "Failed to start service: ${e.message}", null)
         }
     }

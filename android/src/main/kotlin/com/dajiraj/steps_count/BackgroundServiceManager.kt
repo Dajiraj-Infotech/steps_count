@@ -3,6 +3,7 @@ package com.dajiraj.steps_count
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -157,16 +158,25 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     }
 
     private fun startForegroundService() {
-        val notification = createNotification()
-        startForeground(
-            NOTIFICATION_ID, notification
-        )
-        Log.d(
-            TAG, "Foreground service started"
-        )
+        try {
+            val notification = createInitialNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            Log.d(TAG, "Foreground service started in onCreate")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground service: ${e.message}", e)
+            // If we can't start foreground, stop the service
+            stopSelf()
+            return
+        }
     }
 
-    private fun createNotification(): Notification {
+    private fun createInitialNotification(): Notification {
+        // Create a simple notification for initial foreground service start
+        // This is called in onCreate() before stepCountManager is initialized
         // Create intent to open the main Flutter activity
         val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -187,13 +197,17 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             0
         }
 
-        return NotificationCompat.Builder(
-            this, CHANNEL_ID
-        ).setContentTitle("Steps Count").setContentText("Today's Steps: $todaysSteps")
-            .setSmallIcon(android.R.drawable.ic_dialog_info).apply {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Steps Count")
+            .setContentText("Today's Steps: $todaysSteps")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .apply {
                 pendingIntent?.let { setContentIntent(it) }
-            }.setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
+            }
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
     }
 
     private fun startBackgroundWork() {
@@ -216,7 +230,7 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     }
 
     private fun updateNotification() {
-        val notification = createNotification()
+        val notification = createInitialNotification()
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(
             NOTIFICATION_ID, notification
