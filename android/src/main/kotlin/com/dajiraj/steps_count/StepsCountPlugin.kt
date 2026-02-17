@@ -56,6 +56,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "getTodaysCount" -> getTodaysCount(result)
             "getStepCount" -> getStepCount(call, result)
             "getTimeline" -> getTimeline(call, result)
+            "exportStepsDatabase" -> exportStepsDatabase(result)
             else -> result.notImplemented()
         }
     }
@@ -178,6 +179,52 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             result.success(timelineData)
         } catch (e: Exception) {
             result.error("TIMELINE_ERROR", "Failed to get timeline data: ${e.message}", null)
+        }
+    }
+
+    private fun exportStepsDatabase(result: Result) {
+        try {
+            val context = this.context ?: run {
+                result.error("CONTEXT_ERROR", "Context not available", null)
+                return
+            }
+
+            // Get the database file path
+            val dbName = "step_count.db"
+            val dbFile = context.getDatabasePath(dbName)
+
+            if (!dbFile.exists()) {
+                result.error("DATABASE_NOT_FOUND", "Steps database (step_count.db) not found", null)
+                return
+            }
+
+            // Determine export location (using cacheDir as requested, fallback to external files dir)
+            val exportDir = context.cacheDir ?: context.getExternalFilesDir(null)
+            
+            if (exportDir == null) {
+                result.error("EXPORT_DIR_ERROR", "Cannot find suitable export directory", null)
+                return
+            }
+
+            // Create destination file
+            val exportFile = java.io.File(exportDir, "step_count_export.db")
+
+            // Copy file
+            copyFile(dbFile, exportFile)
+
+            Log.d(TAG, "Database exported to: ${exportFile.absolutePath}")
+            result.success(exportFile.absolutePath)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to export database", e)
+            result.error("EXPORT_ERROR", "Failed to export database: ${e.message}", null)
+        }
+    }
+
+    private fun copyFile(source: java.io.File, dest: java.io.File) {
+        source.inputStream().use { input ->
+            dest.outputStream().use { output ->
+                input.copyTo(output)
+            }
         }
     }
 

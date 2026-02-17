@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:steps_count/steps_count.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:steps_count_example/utils/app_utils.dart';
 import 'package:steps_count_example/widgets/common_button.dart';
 import 'package:steps_count_example/widgets/date_time_selector.dart';
@@ -212,7 +213,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             children: [
               _buildTodayCountContainer(),
               const SizedBox(height: 15),
+              const SizedBox(height: 15),
               _buildDateSelectionSection(),
+              const SizedBox(height: 15),
+              _buildExportButton(),
               const SizedBox(height: 15),
               _buildServiceRequestBtn(),
             ],
@@ -295,6 +299,52 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onPressed: _navigateToTimeline,
       primaryColor: Colors.purple.shade500,
       shadowColor: Colors.purple,
+      isEnabled: true,
+    );
+  }
+
+  Future<void> _exportDatabase() async {
+    try {
+      final path = await _stepsCounterPlugin.exportStepsDatabase();
+      if (!mounted) return;
+
+      if (path != null) {
+        // Copy to clipboard for easier testing
+        await Clipboard.setData(ClipboardData(text: path));
+        
+        // Share the file
+        await Share.shareXFiles(
+          [XFile(path)],
+          text: 'Steps Count DB Export',
+        );
+        
+        AppUtils.showSnackBar(context, 'DB exported & share sheet opened');
+        debugPrint('DB exported to: $path');
+      } else {
+        AppUtils.showSnackBar(
+          context,
+          'Export returned null (Expected on iOS)',
+          color: Colors.orange,
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      AppUtils.showSnackBar(
+        context,
+        'Error exporting DB: $e',
+        color: Colors.red,
+      );
+      debugPrint('Error exporting DB: $e');
+    }
+  }
+
+  Widget _buildExportButton() {
+    return CommonButton(
+      label: 'Export Database',
+      icon: Icons.upload_file_rounded,
+      onPressed: _exportDatabase,
+      primaryColor: Colors.orange.shade500,
+      shadowColor: Colors.orange,
       isEnabled: true,
     );
   }

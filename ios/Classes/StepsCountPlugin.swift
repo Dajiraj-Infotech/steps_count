@@ -37,6 +37,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         case "getTimeline":
             handleGetTimeline(call: call, result: result)
             
+        case "exportStepsDatabase":
+            result(nil)
+            
         default:
             result(FlutterMethodNotImplemented)
         }
