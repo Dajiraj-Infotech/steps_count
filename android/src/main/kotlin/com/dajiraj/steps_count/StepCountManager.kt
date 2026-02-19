@@ -18,6 +18,7 @@ class StepCountManager(context: Context) {
         private const val PREFS_NAME = "steps_count_prefs"
         private const val KEY_LAST_SENSOR_VALUE = "last_sensor_value"
         private const val KEY_SESSION_STEPS = "session_steps"
+        private const val KEY_IS_INITIALIZED = "is_initialized"
 
         var stepCountChannel: MethodChannel? = null
     }
@@ -42,9 +43,10 @@ class StepCountManager(context: Context) {
     private fun loadState() {
         lastSensorValue = prefs.getFloat(KEY_LAST_SENSOR_VALUE, 0f)
         sessionSteps = prefs.getInt(KEY_SESSION_STEPS, 0)
+        isInitialized = prefs.getBoolean(KEY_IS_INITIALIZED, false)
 
         Log.d(
-            TAG, "State loaded - lastSensorValue: $lastSensorValue, sessionSteps: $sessionSteps"
+            TAG, "State loaded - lastSensorValue: $lastSensorValue, sessionSteps: $sessionSteps, isInitialized: $isInitialized"
         )
     }
 
@@ -55,6 +57,7 @@ class StepCountManager(context: Context) {
         prefs.edit().apply {
             putFloat(KEY_LAST_SENSOR_VALUE, lastSensorValue)
             putInt(KEY_SESSION_STEPS, sessionSteps)
+            putBoolean(KEY_IS_INITIALIZED, isInitialized)
             apply()
         }
     }
