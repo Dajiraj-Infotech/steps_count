@@ -204,7 +204,16 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             // Create destination file
             val exportFile = java.io.File(exportDir, "step_count_export.db")
 
-            // Copy file
+            // C3: Flush the WAL into the main database file before copying.
+            // Without this, a WAL-mode SQLite copy will be missing uncommitted or unflushed pages.
+            android.database.sqlite.SQLiteDatabase.openDatabase(
+                dbFile.absolutePath, null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
+            ).use { db ->
+                db.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+            }
+
+            // Copy the now-consistent database file
             copyFile(dbFile, exportFile)
 
             Log.d(TAG, "Database exported to: ${exportFile.absolutePath}")

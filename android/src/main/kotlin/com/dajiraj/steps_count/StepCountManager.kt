@@ -18,12 +18,11 @@ import kotlin.math.roundToInt
 /**
  * Manages step counting logic and database operations
  */
-class StepCountManager(context: Context) {
+class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit = {}) {
     companion object {
         private const val TAG = "StepCountManager"
         private const val PREFS_NAME = "steps_count_prefs"
         private const val KEY_LAST_SENSOR_VALUE = "last_sensor_value"
-        private const val KEY_SESSION_STEPS = "session_steps"
         private const val KEY_IS_INITIALIZED = "is_initialized"
         private const val KEY_PENDING_STEPS = "pending_steps"
 
@@ -37,11 +36,11 @@ class StepCountManager(context: Context) {
     private val database = StepCountDatabase(context)
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    private val coroutineScope = CoroutineScope(Dispatchers.IO)
+    // H2: SupervisorJob ensures a failing child coroutine does not cancel the flush loop
+    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // Baseline state
+    // Baseline state — always read/written on the sensor callback thread only (C1)
     private var lastSensorValue: Float = 0f
-    private var sessionSteps: Int = 0
     private var isInitialized = false
 
     // In-memory accumulator: steps not yet written to SQLite.
@@ -62,32 +61,29 @@ class StepCountManager(context: Context) {
      */
     private fun loadState() {
         lastSensorValue = prefs.getFloat(KEY_LAST_SENSOR_VALUE, 0f)
-        sessionSteps = prefs.getInt(KEY_SESSION_STEPS, 0)
         isInitialized = prefs.getBoolean(KEY_IS_INITIALIZED, false)
-        // Recover any steps that were buffered but not yet flushed to DB before last death
+        // Recover steps buffered but not yet flushed to DB before last process death
         pendingSteps.set(prefs.getInt(KEY_PENDING_STEPS, 0))
 
         Log.d(
             TAG, "State loaded - lastSensorValue: $lastSensorValue, " +
-                 "sessionSteps: $sessionSteps, isInitialized: $isInitialized, " +
-                 "pendingSteps: ${pendingSteps.get()}"
+                 "isInitialized: $isInitialized, pendingSteps: ${pendingSteps.get()}"
         )
     }
 
     /**
-     * Persist baseline + pendingSteps to SharedPreferences as a crash safety-net.
+     * Persist the sensor baseline to SharedPreferences on every sensor event.
+     * Called only from the sensor callback thread (never from a coroutine).
      *
      * IMPORTANT: The baseline (lastSensorValue) advances IMMEDIATELY in onSensorChanged(),
-     * before any DB write. Crash safety comes entirely from pendingSteps being persisted here —
-     * NOT from baseline immutability. Do not "optimize" this to delay the baseline advance;
-     * doing so will reintroduce step loss on sensor reset.
+     * before any DB write. Crash safety for buffered steps comes from pendingSteps being
+     * written after each successful DB flush in flushPendingSteps() — NOT from baseline
+     * immutability. Do not delay the baseline advance; doing so reintroduces step loss on reset.
      */
-    private fun saveState() {
+    private fun saveBaseline() {
         prefs.edit().apply {
             putFloat(KEY_LAST_SENSOR_VALUE, lastSensorValue)
-            putInt(KEY_SESSION_STEPS, sessionSteps)
             putBoolean(KEY_IS_INITIALIZED, isInitialized)
-            putInt(KEY_PENDING_STEPS, pendingSteps.get())
             apply()
         }
     }
@@ -100,40 +96,37 @@ class StepCountManager(context: Context) {
     fun onSensorChanged(sensorValue: Float) {
         try {
             if (!isInitialized) {
-                // First sensor reading - initialize baseline
                 lastSensorValue = sensorValue
                 isInitialized = true
-                saveState()
+                saveBaseline()
                 Log.d(TAG, "Initialized with sensor value: $sensorValue")
                 return
             }
 
-            // Calculate step difference
-            val stepDifference = (sensorValue - lastSensorValue).roundToInt()
+            // H1: compute delta in Double to avoid Float precision loss at high cumulative counts
+            val stepDifference = (sensorValue.toDouble() - lastSensorValue.toDouble()).roundToInt()
 
             if (stepDifference > 0) {
-                // Accumulate into in-memory buffer; advance baseline immediately
-                sessionSteps += stepDifference
+                // Advance baseline on the sensor callback thread, then buffer the delta
                 lastSensorValue = sensorValue
                 pendingSteps.addAndGet(stepDifference)
 
-                Log.d(TAG, "Steps buffered: $stepDifference, Pending: ${pendingSteps.get()}, Session: $sessionSteps")
+                Log.d(TAG, "Steps buffered: $stepDifference, Pending: ${pendingSteps.get()}")
 
-                // Persist safety-net snapshot (pendingSteps acts as crash recovery)
-                saveState()
+                // M3: only persist baseline here; pendingSteps is written after each successful flush
+                saveBaseline()
 
-                // Flush immediately if threshold reached
                 if (pendingSteps.get() >= FLUSH_STEP_THRESHOLD) {
                     coroutineScope.launch { flushPendingSteps() }
                 }
             } else if (stepDifference < 0) {
-                // Sensor reset (device reboot, etc.): flush current buffer first, then re-baseline
-                Log.w(TAG, "Sensor reset detected. Flushing and reinitializing.")
-                coroutineScope.launch {
-                    flushPendingSteps()
-                    lastSensorValue = sensorValue
-                    saveState()
-                }
+                // C1: Sensor reset — re-baseline synchronously on the sensor callback thread
+                // to avoid cross-thread writes to lastSensorValue.
+                // Only the DB flush is dispatched to IO.
+                Log.w(TAG, "Sensor reset detected. Re-baselining synchronously.")
+                lastSensorValue = sensorValue
+                saveBaseline()
+                coroutineScope.launch { flushPendingSteps() }
             }
             stepCountChannel?.invokeMethod("onSensorChanged", null)
         } catch (e: Exception) {
@@ -155,12 +148,12 @@ class StepCountManager(context: Context) {
 
     /**
      * Write all buffered steps to SQLite atomically.
-     * Clears pendingSteps from SharedPreferences only after a successful DB insert.
-     * Safe to call from any thread.
+     * M3: pendingSteps is written to SharedPreferences only after a successful DB insert.
+     * M4: private — external callers must not drive flushes directly.
      */
-    suspend fun flushPendingSteps() {
+    private suspend fun flushPendingSteps() {
         // Atomically snapshot and zero the accumulator.
-        // Any steps the sensor thread adds AFTER this point go into the next flush.
+        // Any steps added by the sensor thread AFTER this point go into the next flush.
         val stepsToFlush = pendingSteps.getAndSet(0)
         if (stepsToFlush <= 0) return
 
@@ -168,12 +161,15 @@ class StepCountManager(context: Context) {
             val utcTimestamp = TimeStampUtils.getCurrentUtcTimestamp()
             database.insertStepCount(stepsToFlush, utcTimestamp)
 
-            // DB write succeeded: update the SharedPreferences safety-net
+            // M3: write pendingSteps to prefs only after confirmed DB success
             prefs.edit().putInt(KEY_PENDING_STEPS, pendingSteps.get()).apply()
 
-            Log.d(TAG, "Flushed $stepsToFlush steps to DB at $utcTimestamp (UTC). Remaining pending: ${pendingSteps.get()}")
+            Log.d(TAG, "Flushed $stepsToFlush steps to DB at $utcTimestamp (UTC). Remaining: ${pendingSteps.get()}")
+
+            // M1: notify caller (BackgroundServiceManager) to refresh the notification
+            onFlushSuccess()
         } catch (e: Exception) {
-            // DB write failed: restore the snapshot so steps are not lost on next flush
+            // DB write failed: restore snapshot so steps are never silently lost
             pendingSteps.addAndGet(stepsToFlush)
             Log.e(TAG, "Failed to flush steps to DB – restored $stepsToFlush to buffer: ${e.message}")
         }
@@ -201,8 +197,10 @@ class StepCountManager(context: Context) {
             Log.d(TAG, "Filter UTC End TimeStamp: $endUTCTimestamp")
 
             val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
-            Log.d(TAG, "Step count query - Total: $dbSteps")
-            dbSteps
+            // M2: include buffered-but-not-yet-flushed steps for an up-to-date total
+            val total = dbSteps + pendingSteps.get()
+            Log.d(TAG, "Step count query - DB: $dbSteps, Pending: ${pendingSteps.get()}, Total: $total")
+            total
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")
             0
@@ -229,9 +227,10 @@ class StepCountManager(context: Context) {
 
             // Get steps from database for today's range
             val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
-
-            Log.d(TAG, "Today's step count - DB: $dbSteps, Total: $dbSteps")
-            dbSteps
+            // M2: include buffered-but-not-yet-flushed steps so UI reflects real-time count
+            val total = dbSteps + pendingSteps.get()
+            Log.d(TAG, "Today's step count - DB: $dbSteps, Pending: ${pendingSteps.get()}, Total: $total")
+            total
         } catch (e: Exception) {
             Log.e(TAG, "Error getting today's step count: ${e.message}")
             0 // Return 0 if DB query fails
