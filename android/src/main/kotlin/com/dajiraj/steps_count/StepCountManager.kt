@@ -38,7 +38,7 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     // H2: SupervisorJob ensures a failing child coroutine does not cancel the flush loop
-    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // Baseline state — always read/written on the sensor callback thread only (C1)
     private var lastSensorValue: Float = 0f
