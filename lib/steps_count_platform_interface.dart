@@ -87,4 +87,15 @@ abstract class StepsCountPlatform extends PlatformInterface {
       'checkSingleHealthKitPermissionStatus() has not been implemented.',
     );
   }
+
+  /// Exports the local steps database file.
+  ///
+  /// Returns the absolute path of the exported database file on success,
+  /// or null if the operation is not supported or fails.
+  ///
+  /// On Android, this copies the internal SQLite database to an accessible location.
+  /// On iOS, this returns null as HealthKit data is not stored in a local SQLite DB.
+  Future<String?> exportStepsDatabase() {
+    throw UnimplementedError('exportStepsDatabase() has not been implemented.');
+  }
 }

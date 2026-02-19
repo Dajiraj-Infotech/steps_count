@@ -147,4 +147,12 @@ class MethodChannelStepsCount extends StepsCountPlatform {
 
     return result ?? false;
   }
+
+  @override
+  Future<String?> exportStepsDatabase() async {
+    final result = await methodChannel.invokeMethod<String>(
+      'exportStepsDatabase',
+    );
+    return result;
+  }
 }
