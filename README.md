@@ -268,6 +268,7 @@ await stepsCount.stopBackgroundService();
 | `getTodaysCount()` | `Future<int>` | Gets step count for today | Both |
 | `getStepCounts({startDate, endDate})` | `Future<int>` | Gets total steps for date range | Both |
 | `getTimeline({startDate, endDate, timeZone})` | `Future<List<TimelineModel>>` | Gets detailed timeline data | Both |
+| `exportStepsDatabase()` | `Future<String?>` | Exports the local steps database file (Android only) | Android |
 
 
 ## Contributing
