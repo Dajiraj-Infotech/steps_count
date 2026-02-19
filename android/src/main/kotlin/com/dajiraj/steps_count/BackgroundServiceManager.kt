@@ -25,6 +25,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         private var isRunning = false
         private var serviceInstance: BackgroundServiceManager? = null
 
+        // Single shared instance – null when the service is not running
+        @Volatile
+        var stepCountManager: StepCountManager? = null
+            private set
+
         // Public methods
         fun isServiceRunning(): Boolean = isRunning
 
@@ -39,7 +44,6 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var stepCounterSensor: Sensor? = null
     private lateinit var serviceScope: CoroutineScope
-    private lateinit var stepCountManager: StepCountManager
 
     override fun onCreate() {
         super.onCreate()
@@ -95,7 +99,8 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
     private fun initializeStepManager() {
         try {
-            stepCountManager = StepCountManager(this)
+            stepCountManager = StepCountManager(this.applicationContext)
+            Companion.stepCountManager = stepCountManager
             Log.d(TAG, "Step count manager initialized")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize step count manager: ${e.message}")
@@ -258,10 +263,9 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         isRunning = false
         serviceInstance = null
 
-        // Cleanup step manager
-        if (::stepCountManager.isInitialized) {
-            stepCountManager.cleanup()
-        }
+        // Cleanup step manager and clear the shared reference
+        stepCountManager?.cleanup()
+        Companion.stepCountManager = null
 
         // Unregister sensor
         unregisterSensor()

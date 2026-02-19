@@ -22,14 +22,12 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private lateinit var channel: MethodChannel
     private var context: Context? = null
     private var activity: android.app.Activity? = null
-    private lateinit var stepCountManager: StepCountManager
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "steps_count")
         channel.setMethodCallHandler(this)
         StepCountManager.stepCountChannel = channel
         context = flutterPluginBinding.applicationContext
-        initializeStepManager(flutterPluginBinding.applicationContext)
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -134,20 +132,15 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
-    private fun initializeStepManager(context: Context) {
-        try {
-            stepCountManager = StepCountManager(context)
-            Log.d(TAG, "Step count manager initialized")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize step count manager: ${e.message}")
-        }
-    }
 
     private fun getTodaysCount(result: Result) {
         try {
-            // Get today's step count from service
-            val todaysCount = stepCountManager.getTodaysCount()
-            result.success(todaysCount)
+            val manager = BackgroundServiceManager.stepCountManager
+            if (manager == null) {
+                result.success(0)
+                return
+            }
+            result.success(manager.getTodaysCount())
         } catch (e: Exception) {
             result.error("TODAYS_COUNT_ERROR", "Failed to get today's count: ${e.message}", null)
         }
@@ -155,13 +148,14 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private fun getStepCount(call: MethodCall, result: Result) {
         try {
-            // Extract date parameters if provided
             val startDate = call.argument<Long>("startDate")
             val endDate = call.argument<Long>("endDate")
-
-            // Get step count from service
-            val stepCount = stepCountManager.getStepCount(startDate, endDate)
-            result.success(stepCount)
+            val manager = BackgroundServiceManager.stepCountManager
+            if (manager == null) {
+                result.success(0)
+                return
+            }
+            result.success(manager.getStepCount(startDate, endDate))
         } catch (e: Exception) {
             result.error("STEP_COUNT_ERROR", "Failed to get step count: ${e.message}", null)
         }
@@ -169,14 +163,15 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private fun getTimeline(call: MethodCall, result: Result) {
         try {
-            // Extract parameters
             val startDate = call.argument<Long>("startDate")
             val endDate = call.argument<Long>("endDate")
             val timeZone = TimeZoneType.fromString(call.argument<String>("timeZone"))
-
-            // Get timeline data from service
-            val timelineData = stepCountManager.getTimeline(startDate, endDate, timeZone)
-            result.success(timelineData)
+            val manager = BackgroundServiceManager.stepCountManager
+            if (manager == null) {
+                result.success(emptyList<Any>())
+                return
+            }
+            result.success(manager.getTimeline(startDate, endDate, timeZone))
         } catch (e: Exception) {
             result.error("TIMELINE_ERROR", "Failed to get timeline data: ${e.message}", null)
         }
