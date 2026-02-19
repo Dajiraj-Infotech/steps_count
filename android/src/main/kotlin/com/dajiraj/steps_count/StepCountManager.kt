@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import io.flutter.plugin.common.MethodChannel
 import java.util.*
+import kotlin.math.roundToInt
 
 /**
  * Manages step counting logic and database operations
@@ -77,7 +78,7 @@ class StepCountManager(context: Context) {
             }
 
             // Calculate step difference
-            val stepDifference = (sensorValue - lastSensorValue).toInt()
+            val stepDifference = (sensorValue - lastSensorValue).roundToInt()
 
             if (stepDifference > 0) {
                 // Valid step increment
