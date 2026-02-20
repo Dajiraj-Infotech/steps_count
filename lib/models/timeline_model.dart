@@ -2,6 +2,10 @@ import 'timezone_type.dart';
 
 /// Model representing a step count entry with timestamp
 class TimelineModel {
+  /// Unique identifier — matches the SQLite uuid column on Android
+  /// and the HealthKit/Health Connect UUID on iOS/Android health platforms.
+  final String? uuid;
+
   /// Number of steps recorded
   final int stepCount;
 
@@ -9,11 +13,16 @@ class TimelineModel {
   final int timestamp;
 
   /// Creates a new TimelineModel instance
-  const TimelineModel({required this.stepCount, required this.timestamp});
+  const TimelineModel({
+    this.uuid,
+    required this.stepCount,
+    required this.timestamp,
+  });
 
   /// Creates a TimelineModel from a Map (typically from native platform)
   factory TimelineModel.fromMap(Map<String, dynamic> map) {
     return TimelineModel(
+      uuid: map['uuid'] as String?,
       stepCount: (map['step_count'] as num?)?.toInt() ?? 0,
       timestamp: (map['timestamp'] as num?)?.toInt() ?? 0,
     );
@@ -21,7 +30,11 @@ class TimelineModel {
 
   /// Converts this TimelineModel to a Map
   Map<String, dynamic> toMap() {
-    return {'step_count': stepCount, 'timestamp': timestamp};
+    return {
+      if (uuid != null) 'uuid': uuid,
+      'step_count': stepCount,
+      'timestamp': timestamp,
+    };
   }
 
   /// Gets the DateTime representation of the timestamp in local timezone
@@ -43,17 +56,18 @@ class TimelineModel {
 
   @override
   String toString() {
-    return 'TimelineModel(stepCount: $stepCount, timestamp: $timestamp, dateTime: $dateTime)';
+    return 'TimelineModel(uuid: $uuid, stepCount: $stepCount, timestamp: $timestamp, dateTime: $dateTime)';
   }
 
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
     return other is TimelineModel &&
+        other.uuid == uuid &&
         other.stepCount == stepCount &&
         other.timestamp == timestamp;
   }
 
   @override
-  int get hashCode => stepCount.hashCode ^ timestamp.hashCode;
+  int get hashCode => uuid.hashCode ^ stepCount.hashCode ^ timestamp.hashCode;
 }

@@ -179,6 +179,7 @@ public class HealthKitManager: NSObject {
                     let timestamp = Int(sample.startDate.timeIntervalSince1970 * 1000)
 
                     timelineData.append([
+                        "uuid": sample.uuid.uuidString,
                         "step_count": Int(stepCount),
                         "timestamp": timestamp
                     ])

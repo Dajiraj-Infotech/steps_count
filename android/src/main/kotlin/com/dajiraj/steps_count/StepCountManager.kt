@@ -274,15 +274,18 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             val responseData = dbTimelineData.map { entry ->
                 val utcTimestamp = entry["timestamp"] as Long
                 val stepCount = entry["step_count"] as Int
+                val uuid = entry["uuid"] as? String
                 val responseTimestamp = if (timeZone.isLocal) {
                     TimeStampUtils.convertUtcTimestampToLocal(utcTimestamp)
                 } else {
                     utcTimestamp // Keep as UTC
                 }
 
-                mapOf<String, Any>(
+                val result = mutableMapOf<String, Any>(
                     "step_count" to stepCount, "timestamp" to responseTimestamp
                 )
+                if (uuid != null) result["uuid"] = uuid
+                result
             }
 
             Log.d(TAG, "Timeline query - Total entries: ${responseData.size}")
