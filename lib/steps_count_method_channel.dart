@@ -150,11 +150,15 @@ class MethodChannelStepsCount extends StepsCountPlatform {
 
   @override
   Future<List<TimelineModel>> getTimelineAfter({
-    required int lastSyncTimestamp,
+    int? lastSyncTimestamp,
   }) async {
+    final Map<String, dynamic> arguments = {};
+    if (lastSyncTimestamp != null) {
+      arguments['lastSyncTimestamp'] = lastSyncTimestamp;
+    }
     final result = await methodChannel.invokeMethod<List<dynamic>>(
       'getTimelineAfter',
-      {'lastSyncTimestamp': lastSyncTimestamp},
+      arguments.isEmpty ? null : arguments,
     );
 
     if (result == null) return [];

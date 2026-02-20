@@ -183,17 +183,8 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
 
     private func handleGetTimelineAfter(call: FlutterMethodCall, result: @escaping FlutterResult) {
         let arguments = call.arguments as? NSDictionary
-        guard let lastSyncMs = (arguments?["lastSyncTimestamp"] as? NSNumber)?.doubleValue, lastSyncMs >= 0 else {
-            result(
-                FlutterError(
-                    code: "INVALID_ARGUMENTS",
-                    message: "lastSyncTimestamp is required and must be a timestamp in milliseconds",
-                    details: nil
-                )
-            )
-            return
-        }
-
+        // nil / absent → use epoch 0 so HealthKit returns all records
+        let lastSyncMs = (arguments?["lastSyncTimestamp"] as? NSNumber)?.doubleValue ?? 0
         let afterDate = HealthUtilities.dateFromMilliseconds(lastSyncMs)
 
         healthKitManager.getTimelineAfter(afterTimestamp: afterDate) { timelineData, error in

@@ -94,7 +94,7 @@ abstract class StepsCountPlatform extends PlatformInterface {
   /// On Android this queries SQLite directly with `WHERE timestamp > lastSyncTimestamp`.
   /// On iOS this queries HealthKit with a predicate starting from [lastSyncTimestamp].
   Future<List<TimelineModel>> getTimelineAfter({
-    required int lastSyncTimestamp,
+    int? lastSyncTimestamp,
   }) {
     throw UnimplementedError('getTimelineAfter() has not been implemented.');
   }

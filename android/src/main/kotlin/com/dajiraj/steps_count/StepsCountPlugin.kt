@@ -180,15 +180,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private fun getTimelineAfter(call: MethodCall, result: Result) {
         try {
-            val lastSyncTimestamp = call.argument<Long>("lastSyncTimestamp")
-            if (lastSyncTimestamp == null) {
-                result.error(
-                    "INVALID_ARGUMENTS",
-                    "lastSyncTimestamp is required and must be a timestamp in milliseconds",
-                    null
-                )
-                return
-            }
+            val lastSyncTimestamp = call.argument<Long>("lastSyncTimestamp") // null = return all
             val manager = BackgroundServiceManager.stepCountManager
             if (manager == null) {
                 result.success(emptyList<Any>())

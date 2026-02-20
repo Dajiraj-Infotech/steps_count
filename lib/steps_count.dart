@@ -244,20 +244,28 @@ class StepsCount {
   /// Returns all timeline entries recorded strictly after [lastSyncTimestamp]
   /// (milliseconds since epoch, **UTC**).
   ///
-  /// Queries the native data source directly — no need to fetch the full list first:
-  /// - **Android**: `WHERE timestamp > lastSyncTimestamp` in SQLite (stored as UTC)
-  /// - **iOS**: HealthKit predicate anchored at [lastSyncTimestamp]
+  /// - If [lastSyncTimestamp] is **non-null**, only entries with a timestamp
+  ///   strictly greater than that value are returned.
+  /// - If [lastSyncTimestamp] is **null**, the entire timeline is returned.
+  ///
+  /// Queries the native data source directly:
+  /// - **Android**: SQLite with `WHERE timestamp > lastSyncTimestamp` (or no filter if null)
+  /// - **iOS**: HealthKit predicate anchored at [lastSyncTimestamp] (or epoch 0 if null)
   ///
   /// Returns a list of [TimelineModel] objects ordered by timestamp ascending.
   ///
   /// Example:
   /// ```dart
+  /// // Only new entries since last sync
   /// final newEntries = await stepsCount.getTimelineAfter(
-  ///   lastSyncTimestamp: lastSyncMs, // UTC ms stored from previous sync
+  ///   lastSyncTimestamp: lastSyncMs,
   /// );
+  ///
+  /// // All entries (first-time fetch)
+  /// final all = await stepsCount.getTimelineAfter();
   /// ```
   Future<List<TimelineModel>> getTimelineAfter({
-    required int lastSyncTimestamp,
+    int? lastSyncTimestamp,
   }) {
     return StepsCountPlatform.instance.getTimelineAfter(
       lastSyncTimestamp: lastSyncTimestamp,

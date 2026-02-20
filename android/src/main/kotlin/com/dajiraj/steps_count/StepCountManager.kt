@@ -298,17 +298,20 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
 
     /**
      * Get all timeline entries recorded strictly after [lastSyncTimestamp] (UTC ms).
-     * The value is used directly as-is for the database query, since the DB stores
-     * timestamps in UTC.
+     * If [lastSyncTimestamp] is null, the entire timeline is returned.
      *
-     * @param lastSyncTimestamp Last-synced UTC timestamp in milliseconds
+     * @param lastSyncTimestamp Last-synced UTC timestamp in milliseconds, or null for all data
      * @return List of timeline maps ordered by timestamp ASC, with timestamps in UTC
      */
-    fun getTimelineAfter(lastSyncTimestamp: Long): List<Map<String, Any>> {
+    fun getTimelineAfter(lastSyncTimestamp: Long?): List<Map<String, Any>> {
         return try {
             Log.d(TAG, "getTimelineAfter - lastSyncTimestamp (UTC): $lastSyncTimestamp")
 
-            val dbData = database.getTimelineDataAfter(lastSyncTimestamp)
+            val dbData = if (lastSyncTimestamp != null) {
+                database.getTimelineDataAfter(lastSyncTimestamp)
+            } else {
+                database.getTimelineData() // no filter — return everything
+            }
 
             val responseData = dbData.map { entry ->
                 val mutableEntry = mutableMapOf<String, Any>(
