@@ -54,6 +54,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "getTodaysCount" -> getTodaysCount(result)
             "getStepCount" -> getStepCount(call, result)
             "getTimeline" -> getTimeline(call, result)
+            "getTimelineAfter" -> getTimelineAfter(call, result)
             "exportStepsDatabase" -> exportStepsDatabase(result)
             else -> result.notImplemented()
         }
@@ -174,6 +175,28 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             result.success(manager.getTimeline(startDate, endDate, timeZone))
         } catch (e: Exception) {
             result.error("TIMELINE_ERROR", "Failed to get timeline data: ${e.message}", null)
+        }
+    }
+
+    private fun getTimelineAfter(call: MethodCall, result: Result) {
+        try {
+            val lastSyncTimestamp = call.argument<Long>("lastSyncTimestamp")
+            if (lastSyncTimestamp == null) {
+                result.error(
+                    "INVALID_ARGUMENTS",
+                    "lastSyncTimestamp is required and must be a timestamp in milliseconds",
+                    null
+                )
+                return
+            }
+            val manager = BackgroundServiceManager.stepCountManager
+            if (manager == null) {
+                result.success(emptyList<Any>())
+                return
+            }
+            result.success(manager.getTimelineAfter(lastSyncTimestamp))
+        } catch (e: Exception) {
+            result.error("TIMELINE_AFTER_ERROR", "Failed to get timeline data after timestamp: ${e.message}", null)
         }
     }
 

@@ -297,6 +297,37 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     }
 
     /**
+     * Get all timeline entries recorded strictly after [lastSyncTimestamp] (UTC ms).
+     * The value is used directly as-is for the database query, since the DB stores
+     * timestamps in UTC.
+     *
+     * @param lastSyncTimestamp Last-synced UTC timestamp in milliseconds
+     * @return List of timeline maps ordered by timestamp ASC, with timestamps in UTC
+     */
+    fun getTimelineAfter(lastSyncTimestamp: Long): List<Map<String, Any>> {
+        return try {
+            Log.d(TAG, "getTimelineAfter - lastSyncTimestamp (UTC): $lastSyncTimestamp")
+
+            val dbData = database.getTimelineDataAfter(lastSyncTimestamp)
+
+            val responseData = dbData.map { entry ->
+                val mutableEntry = mutableMapOf<String, Any>(
+                    "step_count" to (entry["step_count"] as Int),
+                    "timestamp" to (entry["timestamp"] as Long)
+                )
+                (entry["uuid"] as? String)?.let { mutableEntry["uuid"] = it }
+                mutableEntry
+            }
+
+            Log.d(TAG, "getTimelineAfter - returned ${responseData.size} entries")
+            responseData
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in getTimelineAfter: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
      * Clean up resources. Guarantees the periodic flush is fully stopped and
      * all buffered steps are persisted before the database is closed.
      *

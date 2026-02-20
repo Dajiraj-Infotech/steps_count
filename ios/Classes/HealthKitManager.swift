@@ -191,4 +191,59 @@ public class HealthKitManager: NSObject {
 
         healthStore.execute(query)
     }
+
+    // MARK: - Timeline After Timestamp
+    /// Returns all step timeline samples recorded strictly after [afterTimestamp].
+    /// Uses `Date.distantFuture` as the upper bound so no end date is required.
+    public func getTimelineAfter(
+        afterTimestamp: Date,
+        completion: @escaping ([[String: Any]]?, String?) -> Void
+    ) {
+        guard let stepCountType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
+            completion(nil, "Step count type not available")
+            return
+        }
+
+        let predicate = HKQuery.predicateForSamples(
+            withStart: afterTimestamp,
+            end: Date.distantFuture,
+            options: .strictStartDate
+        )
+
+        let sortByDate = NSSortDescriptor(
+            key: HKSampleSortIdentifierStartDate,
+            ascending: true
+        )
+
+        let query = HKSampleQuery(
+            sampleType: stepCountType,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: [sortByDate]
+        ) { _, samples, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(nil, error.localizedDescription)
+                    return
+                }
+
+                guard let samples = samples as? [HKQuantitySample] else {
+                    completion([], nil)
+                    return
+                }
+
+                let timelineData: [[String: Any]] = samples.map { sample in
+                    [
+                        "uuid": sample.uuid.uuidString,
+                        "step_count": Int(sample.quantity.doubleValue(for: HKUnit.count())),
+                        "timestamp": Int(sample.startDate.timeIntervalSince1970 * 1000)
+                    ]
+                }
+
+                completion(timelineData, nil)
+            }
+        }
+
+        healthStore.execute(query)
+    }
 }

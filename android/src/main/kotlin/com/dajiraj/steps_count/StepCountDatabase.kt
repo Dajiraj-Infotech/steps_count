@@ -230,6 +230,51 @@ class StepCountDatabase(context: Context) :
     }
 
     /**
+     * Get timeline data after a specific timestamp.
+     * Queries the indexed `timestamp` column directly with `WHERE timestamp > afterTimestamp`.
+     *
+     * @param afterTimestamp UTC timestamp in milliseconds — only entries strictly after this are returned
+     * @return List of maps containing uuid, step_count, and timestamp
+     */
+    fun getTimelineDataAfter(afterTimestamp: Long): List<Map<String, Any>> {
+        return try {
+            val db = readableDatabase
+            val timelineData = mutableListOf<Map<String, Any>>()
+
+            val cursor = db.query(
+                TABLE_STEPS,
+                arrayOf(COLUMN_UUID, COLUMN_STEP_COUNT, COLUMN_TIMESTAMP),
+                "$COLUMN_TIMESTAMP > ?",
+                arrayOf(afterTimestamp.toString()),
+                null,
+                null,
+                "$COLUMN_TIMESTAMP ASC"
+            )
+
+            while (cursor.moveToNext()) {
+                val uuid = cursor.getString(0)
+                val stepCount = cursor.getInt(1)
+                val timestamp = cursor.getLong(2)
+
+                timelineData.add(
+                    mapOf(
+                        "uuid" to uuid,
+                        "step_count" to stepCount,
+                        "timestamp" to timestamp
+                    )
+                )
+            }
+            cursor.close()
+
+            Log.d(TAG, "Timeline-after query: ${timelineData.size} entries after $afterTimestamp")
+            timelineData
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting timeline data after timestamp: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
      * Build SQL query components for date filtering.
      */
     private fun buildDateQuery(startDate: Long?, endDate: Long?): Pair<String?, Array<String>?> {

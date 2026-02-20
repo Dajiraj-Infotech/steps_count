@@ -149,6 +149,25 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   }
 
   @override
+  Future<List<TimelineModel>> getTimelineAfter({
+    required int lastSyncTimestamp,
+  }) async {
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'getTimelineAfter',
+      {'lastSyncTimestamp': lastSyncTimestamp},
+    );
+
+    if (result == null) return [];
+
+    return result.map((item) {
+      if (item is Map) {
+        return TimelineModel.fromMap(Map<String, dynamic>.from(item));
+      }
+      return const TimelineModel(stepCount: 0, timestamp: 0);
+    }).toList();
+  }
+
+  @override
   Future<String?> exportStepsDatabase() async {
     final result = await methodChannel.invokeMethod<String>(
       'exportStepsDatabase',

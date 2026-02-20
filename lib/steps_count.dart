@@ -240,4 +240,27 @@ class StepsCount {
   Future<String?> exportStepsDatabase() {
     return StepsCountPlatform.instance.exportStepsDatabase();
   }
+
+  /// Returns all timeline entries recorded strictly after [lastSyncTimestamp]
+  /// (milliseconds since epoch, **UTC**).
+  ///
+  /// Queries the native data source directly — no need to fetch the full list first:
+  /// - **Android**: `WHERE timestamp > lastSyncTimestamp` in SQLite (stored as UTC)
+  /// - **iOS**: HealthKit predicate anchored at [lastSyncTimestamp]
+  ///
+  /// Returns a list of [TimelineModel] objects ordered by timestamp ascending.
+  ///
+  /// Example:
+  /// ```dart
+  /// final newEntries = await stepsCount.getTimelineAfter(
+  ///   lastSyncTimestamp: lastSyncMs, // UTC ms stored from previous sync
+  /// );
+  /// ```
+  Future<List<TimelineModel>> getTimelineAfter({
+    required int lastSyncTimestamp,
+  }) {
+    return StepsCountPlatform.instance.getTimelineAfter(
+      lastSyncTimestamp: lastSyncTimestamp,
+    );
+  }
 }
