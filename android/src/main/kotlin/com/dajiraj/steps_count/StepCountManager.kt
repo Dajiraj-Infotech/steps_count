@@ -198,10 +198,8 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             Log.d(TAG, "Filter UTC End TimeStamp: $endUTCTimestamp")
 
             val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
-            // M2: include buffered-but-not-yet-flushed steps for an up-to-date total
-            val total = dbSteps + pendingSteps.get()
-            Log.d(TAG, "Step count query - DB: $dbSteps, Pending: ${pendingSteps.get()}, Total: $total")
-            total
+            Log.d(TAG, "Step count query - DB: $dbSteps")
+            dbSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")
             0
@@ -228,10 +226,8 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
 
             // Get steps from database for today's range
             val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
-            // M2: include buffered-but-not-yet-flushed steps so UI reflects real-time count
-            val total = dbSteps + pendingSteps.get()
-            Log.d(TAG, "Today's step count - DB: $dbSteps, Pending: ${pendingSteps.get()}, Total: $total")
-            total
+            Log.d(TAG, "Today's step count - DB: $dbSteps")
+            dbSteps
         } catch (e: Exception) {
             Log.e(TAG, "Error getting today's step count: ${e.message}")
             0 // Return 0 if DB query fails
