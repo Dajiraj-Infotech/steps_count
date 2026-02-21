@@ -25,6 +25,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         private var isRunning = false
         private var serviceInstance: BackgroundServiceManager? = null
 
+        // Single shared instance – null when the service is not running
+        @Volatile
+        var stepCountManager: StepCountManager? = null
+            private set
+
         // Public methods
         fun isServiceRunning(): Boolean = isRunning
 
@@ -39,7 +44,9 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var stepCounterSensor: Sensor? = null
     private lateinit var serviceScope: CoroutineScope
-    private lateinit var stepCountManager: StepCountManager
+
+    // H5: guard to prevent double-cleanup on interleaved stopService() + onDestroy() calls
+    private var cleanupDone = false
 
     override fun onCreate() {
         super.onCreate()
@@ -95,7 +102,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
     private fun initializeStepManager() {
         try {
-            stepCountManager = StepCountManager(this)
+            // H3: write directly to companion; no redundant local field
+            Companion.stepCountManager = StepCountManager(
+                context = this.applicationContext,
+                onFlushSuccess = { updateNotification() }  // M1: notification on each flush
+            )
             Log.d(TAG, "Step count manager initialized")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize step count manager: ${e.message}")
@@ -106,32 +117,17 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         if (isRunning) return
         isRunning = true
 
-        // Register sensor
         registerSensor()
-
-        // Start foreground service
         startForegroundService()
-
-        // Start background work
-        startBackgroundWork()
+        updateNotification() // initial notification with current step count
 
         Log.d(TAG, "Service started successfully")
     }
 
     private fun stopService() {
-        isRunning = false
-        serviceInstance = null
-
-        // Unregister sensor
-        unregisterSensor()
-
-        // Cancel coroutines
+        doCleanup()
         serviceScope.cancel()
-
-        // Stop foreground service
         stopForeground(STOP_FOREGROUND_REMOVE)
-
-        // Stop self
         stopSelf()
     }
 
@@ -190,12 +186,8 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             null
         }
 
-        // Get today's step count for notification
-        val todaysSteps = if (::stepCountManager.isInitialized) {
-            stepCountManager.getTodaysCount()
-        } else {
-            0
-        }
+        // H4: companion property is nullable; use null-safe call instead of stale lateinit guard
+        val todaysSteps = stepCountManager?.getTodaysCount() ?: 0
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Steps Count")
@@ -210,23 +202,16 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             .build()
     }
 
-    private fun startBackgroundWork() {
-        serviceScope.launch {
 
-            while (isRunning) {
-                try {
-                    // Update notification
-                    updateNotification()
-
-                    // Sleep for 5 seconds
-                    delay(5000)
-                } catch (e: Exception) {
-                    Log.e(
-                        TAG, "Error in background work: ${e.message}"
-                    )
-                }
-            }
-        }
+    // H5: centralised, guarded cleanup. Safe to call from both stopService() and onDestroy().
+    private fun doCleanup() {
+        if (cleanupDone) return
+        cleanupDone = true
+        isRunning = false
+        serviceInstance = null
+        unregisterSensor()
+        stepCountManager?.cleanup()
+        Companion.stepCountManager = null
     }
 
     private fun updateNotification() {
@@ -239,9 +224,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent?) {
         event?.let { sensorEvent ->
-            if (sensorEvent.sensor.type == Sensor.TYPE_STEP_COUNTER && ::stepCountManager.isInitialized) {
+            // H4: companion property is nullable; check != null instead of stale lateinit guard
+            val manager = stepCountManager
+            if (sensorEvent.sensor.type == Sensor.TYPE_STEP_COUNTER && manager != null) {
                 val sensorValue = sensorEvent.values[0]
-                stepCountManager.onSensorChanged(sensorValue)
+                manager.onSensorChanged(sensorValue)
                 Log.d(TAG, "Step sensor value: $sensorValue")
             }
         }
@@ -254,22 +241,8 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "Service destroyed")
-
-        isRunning = false
-        serviceInstance = null
-
-        // Cleanup step manager
-        if (::stepCountManager.isInitialized) {
-            stepCountManager.cleanup()
-        }
-
-        // Unregister sensor
-        unregisterSensor()
-
-        // Cancel coroutines
+        doCleanup()
         serviceScope.cancel()
-
-        // Stop foreground service
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 }

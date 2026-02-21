@@ -36,6 +36,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
             
         case "getTimeline":
             handleGetTimeline(call: call, result: result)
+
+        case "getTimelineAfter":
+            handleGetTimelineAfter(call: call, result: result)
             
         case "exportStepsDatabase":
             result(nil)
@@ -169,6 +172,27 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
                     FlutterError(
                         code: "DATA_ERROR", 
                         message: error, 
+                        details: nil
+                    )
+                )
+            } else {
+                result(timelineData ?? [])
+            }
+        }
+    }
+
+    private func handleGetTimelineAfter(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        let arguments = call.arguments as? NSDictionary
+        // nil / absent → use epoch 0 so HealthKit returns all records
+        let lastSyncMs = (arguments?["lastSyncTimestamp"] as? NSNumber)?.doubleValue ?? 0
+        let afterDate = HealthUtilities.dateFromMilliseconds(lastSyncMs)
+
+        healthKitManager.getTimelineAfter(afterTimestamp: afterDate) { timelineData, error in
+            if let error = error {
+                result(
+                    FlutterError(
+                        code: "DATA_ERROR",
+                        message: error,
                         details: nil
                     )
                 )

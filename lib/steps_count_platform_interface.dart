@@ -88,6 +88,17 @@ abstract class StepsCountPlatform extends PlatformInterface {
     );
   }
 
+  /// Returns all timeline entries recorded strictly after [lastSyncTimestamp]
+  /// (milliseconds since epoch).
+  ///
+  /// On Android this queries SQLite directly with `WHERE timestamp > lastSyncTimestamp`.
+  /// On iOS this queries HealthKit with a predicate starting from [lastSyncTimestamp].
+  Future<List<TimelineModel>> getTimelineAfter({
+    int? lastSyncTimestamp,
+  }) {
+    throw UnimplementedError('getTimelineAfter() has not been implemented.');
+  }
+
   /// Exports the local steps database file.
   ///
   /// Returns the absolute path of the exported database file on success,
