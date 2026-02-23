@@ -149,6 +149,25 @@ class StepCountDatabase(context: Context) :
     }
 
     /**
+     * Run a full WAL checkpoint so all WAL pages are merged into the main DB file.
+     * Call before copying the database file for export. Uses this helper's connection.
+     *
+     * @return true if checkpoint ran successfully, false otherwise
+     */
+    fun runWalCheckpointFull(): Boolean {
+        return try {
+            writableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { cursor ->
+                cursor.moveToFirst()
+            }
+            Log.d(TAG, "WAL checkpoint (FULL) completed")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "WAL checkpoint failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * Get total step count for a date range.
      *
      * @param startDate Start date in milliseconds (nullable)

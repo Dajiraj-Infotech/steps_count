@@ -17,7 +17,13 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 /**
- * Manages step counting logic and database operations
+ * Manages step counting logic and database operations.
+ *
+ * OEM behaviour (POCO, Vivo, OPPO, Realme): the step counter often goes silent for minutes or
+ * hours, then delivers one callback with a large delta (sensor batching, Doze, motion
+ * co-processor). Flush threshold (50 steps / 1 min) controls when we write; it does not limit
+ * how big a single callback can be. So large single-row DB entries are expected on these devices—
+ * not a database or delta-math bug.
  */
 class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit = {}) {
     companion object {
@@ -30,6 +36,25 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         // Flush thresholds
         private const val FLUSH_STEP_THRESHOLD = 50
         private const val FLUSH_INTERVAL_MS = 60_000L // 60 seconds
+
+        /**
+         * Max delta accepted from a single sensor callback. OEM batches (8h walk+cycle) can exceed
+         * 100k; we accept large real-world batches and only reject truly absurd values (sensor
+         * glitch / overflow). Distinct from MAX_STEPS_PER_ROW (DB hygiene).
+         */
+        private const val MAX_REASONABLE_DELTA = 500_000
+
+        /**
+         * Cap per DB row for hygiene; excess is deferred to next flush (no step loss). Kept lower
+         * than MAX_REASONABLE_DELTA so we split large batches into multiple rows, not cap reality.
+         */
+        private const val MAX_STEPS_PER_ROW = 50_000
+
+        /** Delta above this is logged as batch_detected (OEM batching evidence; logs only, not DB). */
+        private const val BATCH_DETECTION_THRESHOLD = FLUSH_STEP_THRESHOLD * 5
+
+        /** Cap in-memory buffer to avoid Integer overflow when summing many large deltas. */
+        private const val MAX_PENDING_STEPS = 1_000_000
 
         var stepCountChannel: MethodChannel? = null
     }
@@ -108,14 +133,37 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             val stepDifference = (sensorValue.toDouble() - lastSensorValue.toDouble()).roundToInt()
 
             if (stepDifference > 0) {
-                // Advance baseline on the sensor callback thread, then buffer the delta
-                lastSensorValue = sensorValue
-                pendingSteps.addAndGet(stepDifference)
+                // Log batch detection for OEM batching evidence (Vivo/Oppo/Poco etc.); logs only.
+                if (stepDifference > BATCH_DETECTION_THRESHOLD) {
+                    Log.d(TAG, "batch_detected delta=$stepDifference (threshold=$BATCH_DETECTION_THRESHOLD)")
+                }
 
-                Log.d(TAG, "Steps buffered: $stepDifference, Pending: ${pendingSteps.get()}")
+                // OEM batching often delivers 1k–10k+ in one callback; that's normal. Only cap
+                // when delta is absurd (sensor glitch / overflow risk); then re-baseline and add cap.
+                val deltaToAdd = if (stepDifference > MAX_REASONABLE_DELTA) {
+                    Log.w(
+                        TAG,
+                        "Absurd delta capped (sensor glitch?): $stepDifference. Re-baselining; adding capped ${MAX_REASONABLE_DELTA}."
+                    )
+                    lastSensorValue = sensorValue
+                    saveBaseline()
+                    MAX_REASONABLE_DELTA
+                } else {
+                    lastSensorValue = sensorValue
+                    saveBaseline()
+                    stepDifference
+                }
 
-                // M3: only persist baseline here; pendingSteps is written after each successful flush
-                saveBaseline()
+                // Cap running total to avoid Integer overflow (can lead to 2147483647 in DB)
+                val current = pendingSteps.get()
+                val addCapped = (current + deltaToAdd).coerceAtMost(MAX_PENDING_STEPS) - current
+                if (addCapped > 0) {
+                    pendingSteps.addAndGet(addCapped)
+                    Log.d(TAG, "Steps buffered: $addCapped, Pending: ${pendingSteps.get()}")
+                }
+                if (addCapped < deltaToAdd) {
+                    Log.w(TAG, "Pending steps capped at $MAX_PENDING_STEPS; dropped ${deltaToAdd - addCapped} from this event.")
+                }
 
                 if (pendingSteps.get() >= FLUSH_STEP_THRESHOLD) {
                     coroutineScope.launch { flushPendingSteps() }
@@ -158,29 +206,49 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         val stepsToFlush = pendingSteps.getAndSet(0)
         if (stepsToFlush <= 0) return
 
+        // Cap per row only to avoid overflow/absurd values (e.g. Integer.MAX_VALUE). OEM batching
+        // can legitimately produce large single-row entries; we don't cap those away.
+        val toInsert = stepsToFlush.coerceAtMost(MAX_STEPS_PER_ROW)
+        if (toInsert < stepsToFlush) {
+            pendingSteps.addAndGet(stepsToFlush - toInsert)
+            Log.w(
+                TAG,
+                "Flush capped to $MAX_STEPS_PER_ROW; ${stepsToFlush - toInsert} steps deferred to next flush."
+            )
+        }
+
         try {
             val utcTimestamp = TimeStampUtils.getCurrentUtcTimestamp()
-            database.insertStepCount(stepsToFlush, utcTimestamp)
+            database.insertStepCount(toInsert, utcTimestamp)
 
             // M3: write pendingSteps to prefs only after confirmed DB success
             prefs.edit().putInt(KEY_PENDING_STEPS, pendingSteps.get()).apply()
 
-            Log.d(TAG, "Flushed $stepsToFlush steps to DB at $utcTimestamp (UTC). Remaining: ${pendingSteps.get()}")
+            Log.d(TAG, "Flushed $toInsert steps to DB at $utcTimestamp (UTC). Remaining: ${pendingSteps.get()}")
 
             // M1: notify caller (BackgroundServiceManager) to refresh the notification
             onFlushSuccess()
         } catch (e: Exception) {
             // DB write failed: restore snapshot so steps are never silently lost
-            pendingSteps.addAndGet(stepsToFlush)
+            pendingSteps.addAndGet(toInsert)
+            if (toInsert < stepsToFlush) pendingSteps.addAndGet(stepsToFlush - toInsert)
             Log.e(TAG, "Failed to flush steps to DB – restored $stepsToFlush to buffer: ${e.message}")
         }
     }
 
     /**
+     * Run a full WAL checkpoint on the same DB instance used for step data.
+     * Call before copying the database file for export so the copy is consistent.
+     *
+     * @return true if checkpoint completed successfully, false otherwise
+     */
+    fun runWalCheckpointForExport(): Boolean = database.runWalCheckpointFull()
+
+    /**
      * Get total step count for a date range
      * @param startDate Start date in milliseconds (nullable - if null, no start limit)
      * @param endDate End date in milliseconds (nullable - if null, no end limit)
-     * @return Total steps in the specified range
+     * @return Total steps in the specified range (includes pending buffer when range includes now)
      */
     fun getStepCount(startDate: Long? = null, endDate: Long? = null): Int {
         return try {
@@ -198,8 +266,12 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             Log.d(TAG, "Filter UTC End TimeStamp: $endUTCTimestamp")
 
             val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
-            Log.d(TAG, "Step count query - DB: $dbSteps")
-            dbSteps
+            val nowUtc = TimeStampUtils.getCurrentUtcTimestamp()
+            val rangeIncludesNow = (startUTCTimestamp == null || startUTCTimestamp <= nowUtc) &&
+                (endUTCTimestamp == null || endUTCTimestamp >= nowUtc)
+            val total = dbSteps + if (rangeIncludesNow) pendingSteps.get() else 0
+            Log.d(TAG, "Step count query - DB: $dbSteps, pending: ${pendingSteps.get()}, total: $total")
+            total
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")
             0
@@ -207,8 +279,10 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     }
 
     /**
-     * Get today's step count from database
-     * @return Total steps for the current day (00:00 - 23:59 UTC)
+     * Get today's step count from database plus any steps not yet flushed (pending buffer).
+     * Read-only; does not flush the buffer.
+     *
+     * @return Total steps for the current day (00:00 - 23:59 local) including pending
      */
     fun getTodaysCount(): Int {
         return try {
@@ -224,10 +298,11 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             Log.d(TAG, "Todays UTC Start TimeStamp: $startUTCTimestamp")
             Log.d(TAG, "Todays UTC End TimeStamp: $endUTCTimestamp")
 
-            // Get steps from database for today's range
             val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
-            Log.d(TAG, "Today's step count - DB: $dbSteps")
-            dbSteps
+            val pending = pendingSteps.get()
+            val total = dbSteps + pending
+            Log.d(TAG, "Today's step count - DB: $dbSteps, pending: $pending, total: $total")
+            total
         } catch (e: Exception) {
             Log.e(TAG, "Error getting today's step count: ${e.message}")
             0 // Return 0 if DB query fails

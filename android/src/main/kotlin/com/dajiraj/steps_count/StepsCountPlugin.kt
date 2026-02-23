@@ -219,13 +219,25 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             // Create destination file
             val exportFile = java.io.File(exportDir, "step_count_export.db")
 
-            // C3: Flush the WAL into the main database file before copying.
-            // Without this, a WAL-mode SQLite copy will be missing uncommitted or unflushed pages.
-            android.database.sqlite.SQLiteDatabase.openDatabase(
-                dbFile.absolutePath, null,
-                android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
-            ).use { db ->
-                db.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+            // Run full WAL checkpoint so the copy is consistent. Use same DB instance when available.
+            val checkpointOk = BackgroundServiceManager.stepCountManager?.runWalCheckpointForExport()
+                ?: run {
+                    android.database.sqlite.SQLiteDatabase.openDatabase(
+                        dbFile.absolutePath, null,
+                        android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
+                    ).use { db ->
+                        try {
+                            db.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+                            Log.d(TAG, "WAL checkpoint (FULL) completed (export fallback)")
+                            true
+                        } catch (e: Exception) {
+                            Log.e(TAG, "WAL checkpoint failed during export: ${e.message}")
+                            false
+                        }
+                    }
+                }
+            if (!checkpointOk) {
+                Log.w(TAG, "Export proceeding after checkpoint failure; copy may be inconsistent")
             }
 
             // Copy the now-consistent database file
