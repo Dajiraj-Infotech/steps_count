@@ -56,6 +56,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "getTimeline" -> getTimeline(call, result)
             "getTimelineAfter" -> getTimelineAfter(call, result)
             "exportStepsDatabase" -> exportStepsDatabase(result)
+            "startStepObserver" -> result.success(true) // iOS-only; no-op on Android
             else -> result.notImplemented()
         }
     }

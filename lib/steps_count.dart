@@ -140,6 +140,16 @@ class StepsCount {
     return StepsCountPlatform.instance.isHealthKitAvailable();
   }
 
+  /// Starts the HealthKit step observer (iOS only).
+  ///
+  /// Call this only after HealthKit permission is granted. On iOS 26+, starting
+  /// the observer in [register(with:)] when authorization is not determined
+  /// can block the main thread for a long time and cause a white screen.
+  /// On Android this is a no-op and returns true.
+  Future<bool> startStepObserver() {
+    return StepsCountPlatform.instance.startStepObserver();
+  }
+
   /// Requests HealthKit permissions for the specified health data types.
   ///
   /// This method prompts the user to grant permissions for accessing the
