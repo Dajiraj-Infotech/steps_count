@@ -4,14 +4,15 @@ import HealthKit
 
 public class StepsCountPlugin: NSObject, FlutterPlugin {
     private let healthKitManager = HealthKitManager()
-    
+    private var methodChannel: FlutterMethodChannel?
+
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "steps_count", binaryMessenger: registrar.messenger())
         let instance = StepsCountPlugin()
+        instance.methodChannel = channel
         registrar.addMethodCallDelegate(instance, channel: channel)
-        HealthKitStepObserver.shared.startObserving(callback: {
-            channel.invokeMethod("onSensorChanged", arguments: nil)
-        })
+        // Do NOT start HealthKit observer here - it can block ~156s on iOS 26 when authorization is not determined.
+        // Observer is started when the app calls "startStepObserver" after permission is granted.
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -42,6 +43,12 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
             
         case "exportStepsDatabase":
             result(nil)
+
+        case "startStepObserver":
+            HealthKitStepObserver.shared.startObserving(callback: { [weak self] in
+                self?.methodChannel?.invokeMethod("onSensorChanged", arguments: nil)
+            })
+            result(true)
             
         default:
             result(FlutterMethodNotImplemented)

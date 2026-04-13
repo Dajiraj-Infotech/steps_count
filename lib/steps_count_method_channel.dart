@@ -99,6 +99,12 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   }
 
   @override
+  Future<bool> startStepObserver() async {
+    final result = await methodChannel.invokeMethod<bool>('startStepObserver');
+    return result ?? false;
+  }
+
+  @override
   Future<bool> requestHealthKitPermissions({
     required List<HealthDataType> dataTypes,
   }) async {

@@ -64,6 +64,15 @@ abstract class StepsCountPlatform extends PlatformInterface {
     );
   }
 
+  /// Starts the HealthKit step observer (iOS only).
+  ///
+  /// Call this only after HealthKit permission is granted. On iOS 26+, starting
+  /// the observer before permission can block the main thread for a long time.
+  /// On Android this is a no-op and returns true.
+  Future<bool> startStepObserver() {
+    throw UnimplementedError('startStepObserver() has not been implemented.');
+  }
+
   Future<bool> requestHealthKitPermissions({
     required List<HealthDataType> dataTypes,
   }) {
