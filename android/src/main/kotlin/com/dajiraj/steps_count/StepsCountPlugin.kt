@@ -55,6 +55,7 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "getStepCount" -> getStepCount(call, result)
             "getTimeline" -> getTimeline(call, result)
             "getTimelineAfter" -> getTimelineAfter(call, result)
+            "getStepSources" -> result.success(emptyList<Any>()) // iOS HealthKit only
             "exportStepsDatabase" -> exportStepsDatabase(result)
             "startStepObserver" -> result.success(true) // iOS-only; no-op on Android
             else -> result.notImplemented()

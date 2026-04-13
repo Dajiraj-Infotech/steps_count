@@ -1,8 +1,59 @@
 import Foundation
 import HealthKit
 
+/// How step samples are filtered when reading from HealthKit.
+enum StepSourceFilterMode {
+    /// Steps from Apple system sources (`com.apple.*`), excluding user-entered samples.
+    case appleDevicesOnly
+    /// Legacy behavior: sum every step sample in the date range.
+    case allSources
+    /// Only samples whose `HKSource.bundleIdentifier` is in this set.
+    case bundleIdentifiers(Set<String>)
+}
+
 public class HealthKitManager: NSObject {
     private let healthStore = HKHealthStore()
+
+    /// Parses filter from method-channel arguments. Omitted keys keep the default:
+    /// **Apple devices only** (matches existing apps after upgrade without Dart changes).
+    static func stepSourceFilterMode(from arguments: [String: Any]?) -> StepSourceFilterMode {
+        guard let arguments = arguments else {
+            return .appleDevicesOnly
+        }
+        if arguments["includeAllSources"] as? Bool == true {
+            return .allSources
+        }
+        if let ids = arguments["sourceBundleIdentifiers"] as? [String] {
+            let trimmed = Set(ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+            if !trimmed.isEmpty {
+                return .bundleIdentifiers(trimmed)
+            }
+        }
+        return .appleDevicesOnly
+    }
+
+    /// `true` for samples recorded by Apple system apps/sources, excluding user-entered Health data.
+    static func isAppleDeviceStepSample(_ sample: HKQuantitySample) -> Bool {
+        if let userEntered = sample.metadata?[HKMetadataKeyWasUserEntered] as? Bool, userEntered {
+            return false
+        }
+        if let num = sample.metadata?[HKMetadataKeyWasUserEntered] as? NSNumber, num.boolValue {
+            return false
+        }
+        let bid = sample.sourceRevision.source.bundleIdentifier
+        return bid.hasPrefix("com.apple.")
+    }
+
+    static func filterStepSamples(_ samples: [HKQuantitySample], mode: StepSourceFilterMode) -> [HKQuantitySample] {
+        switch mode {
+        case .allSources:
+            return samples
+        case .appleDevicesOnly:
+            return samples.filter { isAppleDeviceStepSample($0) }
+        case .bundleIdentifiers(let ids):
+            return samples.filter { ids.contains($0.sourceRevision.source.bundleIdentifier) }
+        }
+    }
     
     // MARK: - HealthKit Availability
     public static func isHealthKitAvailable() -> Bool {
@@ -99,7 +150,12 @@ public class HealthKitManager: NSObject {
     }
     
     // MARK: - Data Retrieval
-    public func getStepCount(from startDate: Date, to endDate: Date, completion: @escaping (Int?, String?) -> Void) {
+    public func getStepCount(
+        from startDate: Date,
+        to endDate: Date,
+        mode: StepSourceFilterMode = .appleDevicesOnly,
+        completion: @escaping (Int?, String?) -> Void
+    ) {
         guard let stepCountType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
             completion(nil, "Step count type not available")
             return
@@ -117,8 +173,9 @@ public class HealthKitManager: NSObject {
                     completion(0, nil)
                     return
                 }
-                
-                let totalSteps = samples.reduce(0) { sum, sample in
+
+                let filtered = Self.filterStepSamples(samples, mode: mode)
+                let totalSteps = filtered.reduce(0) { sum, sample in
                     sum + Int(sample.quantity.doubleValue(for: HKUnit.count()))
                 }
                 completion(totalSteps, nil)
@@ -129,7 +186,10 @@ public class HealthKitManager: NSObject {
     }
 
     
-    public func getTodaysCount(completion: @escaping (Int?, String?) -> Void) {
+    public func getTodaysCount(
+        mode: StepSourceFilterMode = .appleDevicesOnly,
+        completion: @escaping (Int?, String?) -> Void
+    ) {
         let calendar = Calendar.current
         let now = Date()
         
@@ -143,11 +203,16 @@ public class HealthKitManager: NSObject {
             return
         }
         
-        getStepCount(from: startOfDay, to: endOfDay, completion: completion)
+        getStepCount(from: startOfDay, to: endOfDay, mode: mode, completion: completion)
     }
     
     // MARK: - Timeline Data Retrieval
-    public func getTimeline(from startDate: Date, to endDate: Date, completion: @escaping ([[String: Any]]?, String?) -> Void) {
+    public func getTimeline(
+        from startDate: Date,
+        to endDate: Date,
+        mode: StepSourceFilterMode = .appleDevicesOnly,
+        completion: @escaping ([[String: Any]]?, String?) -> Void
+    ) {
         guard let stepCountType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
             completion(nil, "Step count type not available")
             return
@@ -172,9 +237,10 @@ public class HealthKitManager: NSObject {
                     return
                 }
 
+                let filtered = Self.filterStepSamples(samples, mode: mode)
                 var timelineData: [[String: Any]] = []
 
-                for sample in samples {
+                for sample in filtered {
                     let stepCount = sample.quantity.doubleValue(for: HKUnit.count())
                     let timestamp = Int(sample.startDate.timeIntervalSince1970 * 1000)
 
@@ -197,6 +263,7 @@ public class HealthKitManager: NSObject {
     /// Uses `Date.distantFuture` as the upper bound so no end date is required.
     public func getTimelineAfter(
         afterTimestamp: Date,
+        mode: StepSourceFilterMode = .appleDevicesOnly,
         completion: @escaping ([[String: Any]]?, String?) -> Void
     ) {
         guard let stepCountType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
@@ -232,7 +299,8 @@ public class HealthKitManager: NSObject {
                     return
                 }
 
-                let timelineData: [[String: Any]] = samples.map { sample in
+                let filtered = Self.filterStepSamples(samples, mode: mode)
+                let timelineData: [[String: Any]] = filtered.map { sample in
                     [
                         "uuid": sample.uuid.uuidString,
                         "step_count": Int(sample.quantity.doubleValue(for: HKUnit.count())),
@@ -241,6 +309,53 @@ public class HealthKitManager: NSObject {
                 }
 
                 completion(timelineData, nil)
+            }
+        }
+
+        healthStore.execute(query)
+    }
+
+    // MARK: - Step sources (for UI selection)
+    /// Lists `HKSource` entries that have step-count data. Optional date range limits which samples are considered.
+    public func getStepSources(
+        from startDate: Date?,
+        to endDate: Date?,
+        completion: @escaping ([[String: Any]]?, String?) -> Void
+    ) {
+        guard let stepCountType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
+            completion(nil, "Step count type not available")
+            return
+        }
+
+        let samplePredicate: NSPredicate?
+        if let start = startDate, let end = endDate {
+            samplePredicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        } else {
+            samplePredicate = nil
+        }
+
+        let query = HKSourceQuery(sampleType: stepCountType, samplePredicate: samplePredicate) { _, sources, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(nil, error.localizedDescription)
+                    return
+                }
+                guard let sources = sources else {
+                    completion([], nil)
+                    return
+                }
+                let list: [[String: Any]] = sources.map { source in
+                    [
+                        "name": source.name,
+                        "bundleIdentifier": source.bundleIdentifier
+                    ]
+                }
+                .sorted {
+                    let n0 = $0["name"] as? String ?? ""
+                    let n1 = $1["name"] as? String ?? ""
+                    return n0.localizedCaseInsensitiveCompare(n1) == .orderedAscending
+                }
+                completion(list, nil)
             }
         }
 

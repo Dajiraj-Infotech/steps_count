@@ -1,3 +1,11 @@
+## 0.0.3
+
+* **BREAKING (iOS behavior)**: Step queries now default to **Apple device sources only**
+  (HealthKit samples with `com.apple.*` bundle IDs, excluding user-entered samples).
+  Existing apps require no Dart changes; pass `includeAllSources: true` to restore
+  the previous all-sources total, or `sourceBundleIdentifiers` to select apps.
+* **NEW**: `getStepSources()` lists HealthKit step contributors (iOS); empty on Android.
+
 ## 0.0.2
 
 * **NEW: iOS Support** - Added complete HealthKit integration for iOS devices

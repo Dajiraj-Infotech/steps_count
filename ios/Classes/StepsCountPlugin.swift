@@ -40,6 +40,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
 
         case "getTimelineAfter":
             handleGetTimelineAfter(call: call, result: result)
+
+        case "getStepSources":
+            handleGetStepSources(call: call, result: result)
             
         case "exportStepsDatabase":
             result(nil)
@@ -104,7 +107,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
     
     // MARK: - Data Retrieval Methods    
     private func handleGetTodaysCount(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        healthKitManager.getTodaysCount() { stepCount, error in
+        let args = call.arguments as? [String: Any]
+        let mode = HealthKitManager.stepSourceFilterMode(from: args)
+        healthKitManager.getTodaysCount(mode: mode) { stepCount, error in
             if let error = error {
                 result(
                     FlutterError(
@@ -137,8 +142,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         // Convert dates from milliseconds to Date()
         let dateFrom = HealthUtilities.dateFromMilliseconds(startDate)
         let dateTo = HealthUtilities.dateFromMilliseconds(endDate)
+        let mode = HealthKitManager.stepSourceFilterMode(from: arguments as? [String: Any])
         
-        healthKitManager.getStepCount(from: dateFrom, to: dateTo) { stepCount, error in
+        healthKitManager.getStepCount(from: dateFrom, to: dateTo, mode: mode) { stepCount, error in
             if let error = error {
                 result(
                     FlutterError(
@@ -172,8 +178,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         // Convert dates from milliseconds to Date()
         let dateFrom = HealthUtilities.dateFromMilliseconds(startDate)
         let dateTo = HealthUtilities.dateFromMilliseconds(endDate)
+        let mode = HealthKitManager.stepSourceFilterMode(from: arguments as? [String: Any])
         
-        healthKitManager.getTimeline(from: dateFrom, to: dateTo) { timelineData, error in
+        healthKitManager.getTimeline(from: dateFrom, to: dateTo, mode: mode) { timelineData, error in
             if let error = error {
                 result(
                     FlutterError(
@@ -193,8 +200,9 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         // nil / absent → use epoch 0 so HealthKit returns all records
         let lastSyncMs = (arguments?["lastSyncTimestamp"] as? NSNumber)?.doubleValue ?? 0
         let afterDate = HealthUtilities.dateFromMilliseconds(lastSyncMs)
+        let mode = HealthKitManager.stepSourceFilterMode(from: arguments as? [String: Any])
 
-        healthKitManager.getTimelineAfter(afterTimestamp: afterDate) { timelineData, error in
+        healthKitManager.getTimelineAfter(afterTimestamp: afterDate, mode: mode) { timelineData, error in
             if let error = error {
                 result(
                     FlutterError(
@@ -205,6 +213,35 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
                 )
             } else {
                 result(timelineData ?? [])
+            }
+        }
+    }
+
+    private func handleGetStepSources(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        let arguments = call.arguments as? [String: Any]
+        let startMs = (arguments?["startDate"] as? NSNumber)?.doubleValue ?? 0
+        let endMs = (arguments?["endDate"] as? NSNumber)?.doubleValue ?? 0
+        let startDate: Date?
+        let endDate: Date?
+        if startMs > 0 && endMs > 0 {
+            startDate = HealthUtilities.dateFromMilliseconds(startMs)
+            endDate = HealthUtilities.dateFromMilliseconds(endMs)
+        } else {
+            startDate = nil
+            endDate = nil
+        }
+
+        healthKitManager.getStepSources(from: startDate, to: endDate) { list, error in
+            if let error = error {
+                result(
+                    FlutterError(
+                        code: "DATA_ERROR",
+                        message: error,
+                        details: nil
+                    )
+                )
+            } else {
+                result(list ?? [])
             }
         }
     }

@@ -5,12 +5,27 @@ import 'steps_count_platform_interface.dart';
 import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
 import 'models/health_data_type.dart';
+import 'models/step_source_info.dart';
 
 /// An implementation of [StepsCountPlatform] that uses method channels.
 class MethodChannelStepsCount extends StepsCountPlatform {
   /// The method channel used to interact with the native platform.
   @visibleForTesting
   final methodChannel = const MethodChannel('steps_count');
+
+  static void _mergeStepSourceOptions(
+    Map<String, dynamic> target, {
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
+  }) {
+    if (includeAllSources) {
+      target['includeAllSources'] = true;
+    }
+    if (sourceBundleIdentifiers != null &&
+        sourceBundleIdentifiers.isNotEmpty) {
+      target['sourceBundleIdentifiers'] = sourceBundleIdentifiers;
+    }
+  }
 
   @override
   Future<void> startBackgroundService() async {
@@ -29,13 +44,30 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   }
 
   @override
-  Future<int> getTodaysCount() async {
-    final result = await methodChannel.invokeMethod<int>('getTodaysCount');
+  Future<int> getTodaysCount({
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
+  }) async {
+    final Map<String, dynamic> arguments = {};
+    _mergeStepSourceOptions(
+      arguments,
+      includeAllSources: includeAllSources,
+      sourceBundleIdentifiers: sourceBundleIdentifiers,
+    );
+    final result = await methodChannel.invokeMethod<int>(
+      'getTodaysCount',
+      arguments.isEmpty ? null : arguments,
+    );
     return result ?? 0;
   }
 
   @override
-  Future<int> getStepCounts({DateTime? startDate, DateTime? endDate}) async {
+  Future<int> getStepCounts({
+    DateTime? startDate,
+    DateTime? endDate,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
+  }) async {
     final Map<String, dynamic> arguments = {};
 
     if (startDate != null) {
@@ -45,6 +77,12 @@ class MethodChannelStepsCount extends StepsCountPlatform {
     if (endDate != null) {
       arguments['endDate'] = endDate.millisecondsSinceEpoch;
     }
+
+    _mergeStepSourceOptions(
+      arguments,
+      includeAllSources: includeAllSources,
+      sourceBundleIdentifiers: sourceBundleIdentifiers,
+    );
 
     final result = await methodChannel.invokeMethod<int>(
       'getStepCount',
@@ -58,6 +96,8 @@ class MethodChannelStepsCount extends StepsCountPlatform {
     DateTime? startDate,
     DateTime? endDate,
     TimeZoneType timeZone = TimeZoneType.local,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
   }) async {
     final Map<String, dynamic> arguments = {
       'timeZone': timeZone.name.toLowerCase(), // Send enum as string
@@ -70,6 +110,12 @@ class MethodChannelStepsCount extends StepsCountPlatform {
     if (endDate != null) {
       arguments['endDate'] = endDate.millisecondsSinceEpoch;
     }
+
+    _mergeStepSourceOptions(
+      arguments,
+      includeAllSources: includeAllSources,
+      sourceBundleIdentifiers: sourceBundleIdentifiers,
+    );
 
     final result = await methodChannel.invokeMethod<List<dynamic>>(
       'getTimeline',
@@ -157,11 +203,18 @@ class MethodChannelStepsCount extends StepsCountPlatform {
   @override
   Future<List<TimelineModel>> getTimelineAfter({
     int? lastSyncTimestamp,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
   }) async {
     final Map<String, dynamic> arguments = {};
     if (lastSyncTimestamp != null) {
       arguments['lastSyncTimestamp'] = lastSyncTimestamp;
     }
+    _mergeStepSourceOptions(
+      arguments,
+      includeAllSources: includeAllSources,
+      sourceBundleIdentifiers: sourceBundleIdentifiers,
+    );
     final result = await methodChannel.invokeMethod<List<dynamic>>(
       'getTimelineAfter',
       arguments.isEmpty ? null : arguments,
@@ -183,5 +236,32 @@ class MethodChannelStepsCount extends StepsCountPlatform {
       'exportStepsDatabase',
     );
     return result;
+  }
+
+  @override
+  Future<List<StepSourceInfo>> getStepSources({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    final Map<String, dynamic> arguments = {};
+    if (startDate != null && endDate != null) {
+      arguments['startDate'] = startDate.millisecondsSinceEpoch;
+      arguments['endDate'] = endDate.millisecondsSinceEpoch;
+    }
+    final result = await methodChannel.invokeMethod<List<dynamic>>(
+      'getStepSources',
+      arguments.isEmpty ? null : arguments,
+    );
+
+    if (result == null) {
+      return [];
+    }
+
+    return result.map((item) {
+      if (item is Map) {
+        return StepSourceInfo.fromMap(Map<String, dynamic>.from(item));
+      }
+      return const StepSourceInfo(name: '', bundleIdentifier: '');
+    }).toList();
   }
 }

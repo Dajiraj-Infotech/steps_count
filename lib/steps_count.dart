@@ -2,9 +2,11 @@ import 'steps_count_platform_interface.dart';
 import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
 import 'models/health_data_type.dart';
+import 'models/step_source_info.dart';
 export 'models/timeline_model.dart';
 export 'models/timezone_type.dart';
 export 'models/health_data_type.dart';
+export 'models/step_source_info.dart';
 
 /// A Flutter plugin for counting steps and managing background step tracking services.
 ///
@@ -54,13 +56,23 @@ class StepsCount {
   /// Returns `0` if no steps have been recorded today or if step data
   /// is not available.
   ///
+  /// On **iOS**, the default is **Apple device sources only** (excludes typical
+  /// third-party apps and user-entered samples). Use [includeAllSources] for
+  /// the legacy combined total, or [sourceBundleIdentifiers] to pick apps.
+  ///
   /// Example:
   /// ```dart
   /// final todaySteps = await stepsCount.getTodaysCount();
   /// print('Steps today: $todaySteps');
   /// ```
-  Future<int> getTodaysCount() {
-    return StepsCountPlatform.instance.getTodaysCount();
+  Future<int> getTodaysCount({
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
+  }) {
+    return StepsCountPlatform.instance.getTodaysCount(
+      includeAllSources: includeAllSources,
+      sourceBundleIdentifiers: sourceBundleIdentifiers,
+    );
   }
 
   /// Gets the total step count for a specified date range.
@@ -83,10 +95,19 @@ class StepsCount {
   /// ```
   ///
   /// Note: Date boundaries are determined by the device's local timezone.
-  Future<int> getStepCounts({DateTime? startDate, DateTime? endDate}) {
+  ///
+  /// On **iOS**, filtering matches [getTodaysCount].
+  Future<int> getStepCounts({
+    DateTime? startDate,
+    DateTime? endDate,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
+  }) {
     return StepsCountPlatform.instance.getStepCounts(
       startDate: startDate,
       endDate: endDate,
+      includeAllSources: includeAllSources,
+      sourceBundleIdentifiers: sourceBundleIdentifiers,
     );
   }
 
@@ -123,11 +144,15 @@ class StepsCount {
     DateTime? startDate,
     DateTime? endDate,
     TimeZoneType timeZone = TimeZoneType.local,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
   }) {
     return StepsCountPlatform.instance.getTimeline(
       startDate: startDate,
       endDate: endDate,
       timeZone: timeZone,
+      includeAllSources: includeAllSources,
+      sourceBundleIdentifiers: sourceBundleIdentifiers,
     );
   }
 
@@ -276,9 +301,32 @@ class StepsCount {
   /// ```
   Future<List<TimelineModel>> getTimelineAfter({
     int? lastSyncTimestamp,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
   }) {
     return StepsCountPlatform.instance.getTimelineAfter(
       lastSyncTimestamp: lastSyncTimestamp,
+      includeAllSources: includeAllSources,
+      sourceBundleIdentifiers: sourceBundleIdentifiers,
+    );
+  }
+
+  /// Returns contributors that have written step data to HealthKit (**iOS**).
+  ///
+  /// Use [StepSourceInfo.bundleIdentifier] with [getTodaysCount],
+  /// [getStepCounts], [getTimeline], and [getTimelineAfter] via
+  /// `sourceBundleIdentifiers`. On **Android** this returns an empty list.
+  ///
+  /// If both [startDate] and [endDate] are set, only sources with samples in
+  /// that range are listed. If either is null, all sources for step count are
+  /// returned (iOS).
+  Future<List<StepSourceInfo>> getStepSources({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) {
+    return StepsCountPlatform.instance.getStepSources(
+      startDate: startDate,
+      endDate: endDate,
     );
   }
 }

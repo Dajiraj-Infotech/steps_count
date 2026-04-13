@@ -4,6 +4,7 @@ import 'steps_count_method_channel.dart';
 import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
 import 'models/health_data_type.dart';
+import 'models/step_source_info.dart';
 
 abstract class StepsCountPlatform extends PlatformInterface {
   /// Constructs a StepsCountPlatform.
@@ -42,11 +43,22 @@ abstract class StepsCountPlatform extends PlatformInterface {
     throw UnimplementedError('isServiceRunning() has not been implemented.');
   }
 
-  Future<int> getTodaysCount() {
+  /// On iOS, step data is filtered by default to **Apple device sources only**
+  /// (see HealthKit). Pass [includeAllSources] to restore the previous
+  /// all-sources sum, or [sourceBundleIdentifiers] to restrict to specific apps.
+  Future<int> getTodaysCount({
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
+  }) {
     throw UnimplementedError('getTodaysCount() has not been implemented.');
   }
 
-  Future<int> getStepCounts({DateTime? startDate, DateTime? endDate}) {
+  Future<int> getStepCounts({
+    DateTime? startDate,
+    DateTime? endDate,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
+  }) {
     throw UnimplementedError('getStepCount() has not been implemented.');
   }
 
@@ -54,6 +66,8 @@ abstract class StepsCountPlatform extends PlatformInterface {
     DateTime? startDate,
     DateTime? endDate,
     TimeZoneType timeZone = TimeZoneType.local,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
   }) {
     throw UnimplementedError('getTimeline() has not been implemented.');
   }
@@ -104,8 +118,21 @@ abstract class StepsCountPlatform extends PlatformInterface {
   /// On iOS this queries HealthKit with a predicate starting from [lastSyncTimestamp].
   Future<List<TimelineModel>> getTimelineAfter({
     int? lastSyncTimestamp,
+    bool includeAllSources = false,
+    List<String>? sourceBundleIdentifiers,
   }) {
     throw UnimplementedError('getTimelineAfter() has not been implemented.');
+  }
+
+  /// Lists HealthKit step sources (iOS). On Android returns an empty list.
+  ///
+  /// Optional [startDate] / [endDate] limit which samples are considered (both
+  /// must be non-null to apply the range).
+  Future<List<StepSourceInfo>> getStepSources({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) {
+    throw UnimplementedError('getStepSources() has not been implemented.');
   }
 
   /// Exports the local steps database file.
