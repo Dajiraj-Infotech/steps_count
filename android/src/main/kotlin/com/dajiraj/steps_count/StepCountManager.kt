@@ -2,6 +2,8 @@ package com.dajiraj.steps_count
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,11 +21,21 @@ import kotlin.math.roundToInt
 /**
  * Manages step counting logic and database operations.
  *
- * OEM behaviour (POCO, Vivo, OPPO, Realme): the step counter often goes silent for minutes or
- * hours, then delivers one callback with a large delta (sensor batching, Doze, motion
- * co-processor). Flush threshold (50 steps / 1 min) controls when we write; it does not limit
- * how big a single callback can be. So large single-row DB entries are expected on these devices—
- * not a database or delta-math bug.
+ * Phase 1 robustness (anti-spike) design. The TYPE_STEP_COUNTER sensor reports cumulative steps
+ * since boot, and several real-world conditions used to turn that into phantom single-entry spikes
+ * of 1k to 50k steps. This class now defends against them at the point of ingestion:
+ *
+ *  1. Garbage gate: non-finite, negative, or absurd (> 1e9) sensor values are dropped before any
+ *     arithmetic, so a hub glitch (uint32-as-float, Float.MAX_VALUE, Infinity) can never be booked.
+ *  2. Boot-session anchoring: the baseline is tagged with BOOT_COUNT + ANDROID_ID. If it was saved
+ *     under a different boot session or device (missed reboot, Auto Backup restore, reinstall), it
+ *     is radioactive and we re-anchor with zero credit instead of booking the arbitrary difference.
+ *  3. Rate gate: a delta faster than a human can physically walk over the elapsed time since the
+ *     last event is quarantined (anchor frozen, nothing credited), not capped-and-added.
+ *
+ * Honest Phase 1 limits (addressed in later phases): steps are still stamped at flush time rather
+ * than at their true event time (time attribution is Phase 3), and the pending-buffer durability
+ * protocol (exactly-once anchor-in-transaction) is Phase 2. See docs/robust_step_counting_spec.md.
  */
 class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit = {}) {
     companion object {
@@ -32,21 +44,46 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         private const val KEY_LAST_SENSOR_VALUE = "last_sensor_value"
         private const val KEY_IS_INITIALIZED = "is_initialized"
         private const val KEY_PENDING_STEPS = "pending_steps"
+        // Phase 1: baseline identity + monotonic time of the last processed event.
+        private const val KEY_LAST_EVENT_ELAPSED = "last_event_elapsed"
+        private const val KEY_BOOT_ID = "boot_id"
 
         // Flush thresholds
         private const val FLUSH_STEP_THRESHOLD = 50
         private const val FLUSH_INTERVAL_MS = 60_000L // 60 seconds
 
         /**
-         * Max delta accepted from a single sensor callback. OEM batches (8h walk+cycle) can exceed
-         * 100k; we accept large real-world batches and only reject truly absurd values (sensor
-         * glitch / overflow). Distinct from MAX_STEPS_PER_ROW (DB hygiene).
+         * Garbage gate (EC-1/EC-48): reject non-finite/negative/absurd cumulative values BEFORE
+         * computing a delta. 1e9 is ~4 steps/sec for 8 years of continuous uptime, comfortably above
+         * any real lifetime count while still rejecting uint32-as-float (4.29e9), Float.MAX_VALUE and
+         * +Infinity. This replaces the old "cap the delta to 500k and add it as real steps" logic,
+         * which was itself a primary spike source.
          */
-        private const val MAX_REASONABLE_DELTA = 500_000
+        private const val GARBAGE_ABS_MAX = 1.0e9f
 
         /**
-         * Cap per DB row for hygiene; excess is deferred to next flush (no step loss). Kept lower
-         * than MAX_REASONABLE_DELTA so we split large batches into multiple rows, not cap reality.
+         * Rate gate (EC-3): the physically-plausible step ceiling for an elapsed interval. Burst
+         * ceiling of 5 steps/sec (above world-record cadence, ~2x a hard run) for the first hour,
+         * then 1.2 steps/sec sustained, plus a small constant slack. Replaces the static
+         * MAX_REASONABLE_DELTA = 500_000, which was ~1000x too loose to catch anything real.
+         */
+        private const val RATE_BURST_PER_SEC = 5.0
+        private const val RATE_SUSTAINED_PER_SEC = 1.2
+        private const val RATE_BASE_SLACK = 60L
+        private const val RATE_BURST_WINDOW_SEC = 3600L
+
+        /**
+         * Quarantine (EC-1/EC-3): when a delta is implausible we freeze the anchor and credit nothing.
+         * If the high value PERSISTS for this many mutually-consistent events across at least this much
+         * time, it is treated as a genuine (rare) hardware re-baseline and we re-anchor to it with zero
+         * credit. A transient glitch never reaches confirmation, so it costs nothing.
+         */
+        private const val QUARANTINE_CONFIRM_COUNT = 3
+        private const val QUARANTINE_CONFIRM_MS = 600_000L // 10 minutes
+
+        /**
+         * Cap per DB row for hygiene; excess is deferred to next flush (no step loss). Real deltas are
+         * now bounded by the rate gate, so this is only reached by long legitimate catch-ups.
          */
         private const val MAX_STEPS_PER_ROW = 50_000
 
@@ -57,6 +94,21 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         private const val MAX_PENDING_STEPS = 1_000_000
 
         var stepCountChannel: MethodChannel? = null
+
+        /**
+         * Physically-plausible maximum steps for an elapsed interval of [dtSec] seconds. Pure function,
+         * exposed for unit testing. Examples: 1s -> 65, 60s -> 360, 1h -> 18,060, 24h -> 117,420,
+         * 10 days -> 1,050,540 (so a genuine multi-day catch-up passes while 50k-in-2s is rejected).
+         */
+        fun plausibleMax(dtSec: Long): Long {
+            val dt = dtSec.coerceAtLeast(0)
+            val burst = minOf(dt, RATE_BURST_WINDOW_SEC)
+            val sustained = maxOf(0L, dt - RATE_BURST_WINDOW_SEC)
+            return RATE_BASE_SLACK + (RATE_BURST_PER_SEC * burst).toLong() + (RATE_SUSTAINED_PER_SEC * sustained).toLong()
+        }
+
+        /** True if [v] is a usable cumulative sensor reading. Pure function, exposed for unit testing. */
+        fun isAcceptableSensorValue(v: Float): Boolean = v.isFinite() && v >= 0f && v <= GARBAGE_ABS_MAX
     }
 
     private val database = StepCountDatabase(context)
@@ -65,9 +117,24 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     // H2: SupervisorJob ensures a failing child coroutine does not cancel the flush loop
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // Baseline state — always read/written on the sensor callback thread only (C1)
+    // Boot-session identity for THIS process (constant for the process lifetime: a reboot kills the
+    // process). Computed once to avoid a content-provider query on every sensor event.
+    private val thisBootId: String = computeBootId(context.applicationContext)
+
+    // Baseline state: always read/written on the sensor callback thread only (C1).
     private var lastSensorValue: Float = 0f
     private var isInitialized = false
+    // Boot id under which lastSensorValue was recorded, and the monotonic (elapsedRealtime) time of the
+    // last processed event. Both persist across process death so the rate gate has a real dt on restart.
+    private var lastBootId: String = ""
+    private var lastEventElapsedMs: Long = -1L
+
+    // Quarantine state for implausible deltas (EC-3). The anchor is frozen while active.
+    private var quarantineActive = false
+    private var quarantineCount = 0
+    private var quarantineValue = 0f
+    private var quarantineFirstElapsedMs = 0L
+    private var quarantineLastElapsedMs = 0L
 
     // In-memory accumulator: steps not yet written to SQLite.
     // AtomicInteger ensures thread-safe read-modify-write between the
@@ -90,96 +157,220 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         isInitialized = prefs.getBoolean(KEY_IS_INITIALIZED, false)
         // Recover steps buffered but not yet flushed to DB before last process death
         pendingSteps.set(prefs.getInt(KEY_PENDING_STEPS, 0))
+        lastEventElapsedMs = prefs.getLong(KEY_LAST_EVENT_ELAPSED, -1L)
+        lastBootId = prefs.getString(KEY_BOOT_ID, "") ?: ""
 
         Log.d(
-            TAG, "State loaded - lastSensorValue: $lastSensorValue, " +
-                 "isInitialized: $isInitialized, pendingSteps: ${pendingSteps.get()}"
+            TAG, "State loaded - lastSensorValue: $lastSensorValue, isInitialized: $isInitialized, " +
+                 "pendingSteps: ${pendingSteps.get()}, lastBootId: $lastBootId, thisBootId: $thisBootId"
         )
     }
 
     /**
-     * Persist the sensor baseline to SharedPreferences on every sensor event.
+     * Persist baseline + identity + pending buffer to SharedPreferences in a single edit.
      * Called only from the sensor callback thread (never from a coroutine).
      *
-     * IMPORTANT: The baseline (lastSensorValue) advances IMMEDIATELY in onSensorChanged(),
-     * before any DB write. Crash safety for buffered steps comes from pendingSteps being
-     * written after each successful DB flush in flushPendingSteps() — NOT from baseline
-     * immutability. Do not delay the baseline advance; doing so reintroduces step loss on reset.
+     * The baseline (lastSensorValue) advances IMMEDIATELY in onSensorChanged(), before any DB write.
+     * Persisting pendingSteps here too (not only after a flush) shrinks the crash-loss window for
+     * buffered steps. The full exactly-once durability protocol (anchor-in-transaction) is Phase 2.
      */
     private fun saveBaseline() {
         prefs.edit().apply {
             putFloat(KEY_LAST_SENSOR_VALUE, lastSensorValue)
             putBoolean(KEY_IS_INITIALIZED, isInitialized)
+            putLong(KEY_LAST_EVENT_ELAPSED, lastEventElapsedMs)
+            putString(KEY_BOOT_ID, lastBootId)
+            putInt(KEY_PENDING_STEPS, pendingSteps.get())
             apply()
         }
+    }
+
+    /** Persist just the pending buffer (used by the flush path after a confirmed DB write). */
+    private fun persistPending() {
+        prefs.edit().putInt(KEY_PENDING_STEPS, pendingSteps.get()).apply()
+    }
+
+    /**
+     * Boot-session fingerprint: BOOT_COUNT (changes on every reboot, API 24+) plus ANDROID_ID
+     * (changes across devices / reinstall on a different device). A baseline whose stored fingerprint
+     * differs from the current one cannot be trusted for a delta.
+     */
+    private fun computeBootId(ctx: Context): String {
+        val cr = ctx.contentResolver
+        val bootCount = try {
+            Settings.Global.getInt(cr, Settings.Global.BOOT_COUNT, -1)
+        } catch (e: Exception) {
+            -1
+        }
+        val androidId = try {
+            Settings.Secure.getString(cr, Settings.Secure.ANDROID_ID) ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+        return "$bootCount|$androidId"
+    }
+
+    private fun clearQuarantine() {
+        quarantineActive = false
+        quarantineCount = 0
+    }
+
+    /**
+     * Re-establish the baseline at [sensorValue] with ZERO credit for anything before it, flushing any
+     * already-buffered (real) steps first so they are not lost. Used on first init, on a boot/device
+     * change, and on a confirmed quarantine. Never books the difference between the old and new
+     * baseline: that difference is exactly the phantom-spike vector.
+     */
+    private fun reAnchor(sensorValue: Float, elapsedMs: Long, bootId: String) {
+        lastSensorValue = sensorValue
+        lastEventElapsedMs = elapsedMs
+        lastBootId = bootId
+        isInitialized = true
+        clearQuarantine()
+        // Persist the new baseline BEFORE launching the flush, so the flush's post-drain
+        // persistPending(0) cannot be overwritten by this save re-writing the old pending value.
+        saveBaseline()
+        coroutineScope.launch { flushPendingSteps() } // book any already-buffered (real) steps
+        stepCountChannel?.invokeMethod("onSensorChanged", null)
     }
 
     /**
      * Process new sensor data and update step count.
      * Steps are accumulated in-memory; DB writes happen in batches.
-     * @param sensorValue The raw value from TYPE_STEP_COUNTER sensor
+     *
+     * @param sensorValue The raw cumulative value from the TYPE_STEP_COUNTER sensor (steps since boot).
+     * @param eventTimestampNanos The hardware event timestamp (nanoseconds on the elapsedRealtime clock).
+     *   Used only to rate-gate the delta by real elapsed time; 0 (unknown) falls back to "now".
      */
-    fun onSensorChanged(sensorValue: Float) {
+    fun onSensorChanged(sensorValue: Float, eventTimestampNanos: Long = 0L) {
         try {
+            // (1) Garbage gate (EC-1/EC-48): drop unusable values before any arithmetic so a hub
+            // glitch can neither be credited nor corrupt the baseline.
+            if (!isAcceptableSensorValue(sensorValue)) {
+                Log.w(TAG, "garbage_value raw=$sensorValue rejected (baseline untouched)")
+                return
+            }
+
+            val nowElapsed = SystemClock.elapsedRealtime()
+            val evElapsed = eventTimestampNanos / 1_000_000
+            // Guard against bogus HAL timestamps (future-dated or epoch-based): fall back to now.
+            val elapsedMs = if (evElapsed in 1..(nowElapsed + 10_000)) evElapsed else nowElapsed
+
+            // (2) First-ever initialization: anchor with zero credit.
             if (!isInitialized) {
-                lastSensorValue = sensorValue
-                isInitialized = true
+                reAnchor(sensorValue, elapsedMs, thisBootId)
+                Log.d(TAG, "Initialized with sensor value: $sensorValue (boot=$thisBootId)")
+                return
+            }
+
+            // (3) Boot-session anchoring (EC-2/EC-11). A baseline recorded under a different boot
+            // count or device (missed reboot, Auto Backup restore, reinstall-on-new-device) is
+            // radioactive: re-anchor with zero credit instead of booking the arbitrary difference.
+            if (lastBootId.isEmpty()) {
+                // Upgrade from a pre-boot-tracking build: adopt the current fingerprint and keep the
+                // baseline. Any stale-baseline delta is now bounded by the rate gate, so no spike.
+                lastBootId = thisBootId
                 saveBaseline()
-                Log.d(TAG, "Initialized with sensor value: $sensorValue")
+            } else if (lastBootId != thisBootId) {
+                Log.w(TAG, "boot/device changed ($lastBootId -> $thisBootId): re-anchoring with zero credit")
+                reAnchor(sensorValue, elapsedMs, thisBootId)
                 return
             }
 
             // H1: compute delta in Double to avoid Float precision loss at high cumulative counts
             val stepDifference = (sensorValue.toDouble() - lastSensorValue.toDouble()).roundToInt()
 
-            if (stepDifference > 0) {
-                // Log batch detection for OEM batching evidence (Vivo/Oppo/Poco etc.); logs only.
-                if (stepDifference > BATCH_DETECTION_THRESHOLD) {
-                    Log.d(TAG, "batch_detected delta=$stepDifference (threshold=$BATCH_DETECTION_THRESHOLD)")
-                }
+            if (stepDifference == 0) {
+                // Duplicate / heartbeat value (EC-51): nothing to credit.
+                stepCountChannel?.invokeMethod("onSensorChanged", null)
+                return
+            }
 
-                // OEM batching often delivers 1k–10k+ in one callback; that's normal. Only cap
-                // when delta is absurd (sensor glitch / overflow risk); then re-baseline and add cap.
-                val deltaToAdd = if (stepDifference > MAX_REASONABLE_DELTA) {
-                    Log.w(
-                        TAG,
-                        "Absurd delta capped (sensor glitch?): $stepDifference. Re-baselining; adding capped ${MAX_REASONABLE_DELTA}."
-                    )
-                    lastSensorValue = sensorValue
-                    saveBaseline()
-                    MAX_REASONABLE_DELTA
-                } else {
-                    lastSensorValue = sensorValue
-                    saveBaseline()
-                    stepDifference
-                }
-
-                // Cap running total to avoid Integer overflow (can lead to 2147483647 in DB)
-                val current = pendingSteps.get()
-                val addCapped = (current + deltaToAdd).coerceAtMost(MAX_PENDING_STEPS) - current
-                if (addCapped > 0) {
-                    pendingSteps.addAndGet(addCapped)
-                    Log.d(TAG, "Steps buffered: $addCapped, Pending: ${pendingSteps.get()}")
-                }
-                if (addCapped < deltaToAdd) {
-                    Log.w(TAG, "Pending steps capped at $MAX_PENDING_STEPS; dropped ${deltaToAdd - addCapped} from this event.")
-                }
-
-                if (pendingSteps.get() >= FLUSH_STEP_THRESHOLD) {
-                    coroutineScope.launch { flushPendingSteps() }
-                }
-            } else if (stepDifference < 0) {
-                // C1: Sensor reset — re-baseline synchronously on the sensor callback thread
-                // to avoid cross-thread writes to lastSensorValue.
-                // Only the DB flush is dispatched to IO.
-                Log.w(TAG, "Sensor reset detected. Re-baselining synchronously.")
+            if (stepDifference < 0) {
+                // Negative delta WITHOUT a boot change = in-session hardware counter reset (EC-49:
+                // hub thermal/watchdog restart). Re-baseline; Phase 1 does not recover the pre-reset gap.
+                Log.w(TAG, "counter_reset old=$lastSensorValue new=$sensorValue; re-baselining")
                 lastSensorValue = sensorValue
+                lastEventElapsedMs = elapsedMs
+                clearQuarantine()
                 saveBaseline()
+                coroutineScope.launch { flushPendingSteps() } // book whatever was already buffered
+                stepCountChannel?.invokeMethod("onSensorChanged", null)
+                return
+            }
+
+            // stepDifference > 0
+            if (stepDifference > BATCH_DETECTION_THRESHOLD) {
+                Log.d(TAG, "batch_detected delta=$stepDifference (threshold=$BATCH_DETECTION_THRESHOLD)")
+            }
+
+            // (4) Rate gate (EC-3). dt is the monotonic elapsed time since the last processed event;
+            // a delta above the physically-plausible ceiling for that window is quarantined, not booked.
+            val dtSec = if (lastEventElapsedMs in 0 until elapsedMs) (elapsedMs - lastEventElapsedMs) / 1000 else 0L
+            val cap = plausibleMax(dtSec)
+            if (stepDifference > cap) {
+                handleImplausibleDelta(sensorValue, elapsedMs, stepDifference, dtSec, cap)
+                return // anchor NOT advanced, nothing credited (no cap-and-add)
+            }
+
+            // (5) Plausible, real steps. Clear any quarantine and credit them.
+            clearQuarantine()
+            lastSensorValue = sensorValue
+            lastEventElapsedMs = elapsedMs
+
+            // Cap running total to avoid Integer overflow (use Long math for the comparison).
+            val current = pendingSteps.get()
+            val addCapped = ((current.toLong() + stepDifference).coerceAtMost(MAX_PENDING_STEPS.toLong())).toInt() - current
+            if (addCapped > 0) {
+                pendingSteps.addAndGet(addCapped)
+                Log.d(TAG, "Steps buffered: $addCapped, Pending: ${pendingSteps.get()}")
+            }
+            if (addCapped < stepDifference) {
+                Log.w(TAG, "Pending steps capped at $MAX_PENDING_STEPS; dropped ${stepDifference - addCapped} from this event.")
+            }
+            saveBaseline() // persists baseline + identity + pending in one edit
+
+            if (pendingSteps.get() >= FLUSH_STEP_THRESHOLD) {
                 coroutineScope.launch { flushPendingSteps() }
             }
             stepCountChannel?.invokeMethod("onSensorChanged", null)
         } catch (e: Exception) {
             Log.e(TAG, "Error processing sensor data: ${e.message}")
+        }
+    }
+
+    /**
+     * Handle a delta that exceeded the physical-rate cap. The anchor is FROZEN (baseline not advanced)
+     * and nothing is credited, so a transient glitch produces zero phantom steps. If the high value
+     * persists for QUARANTINE_CONFIRM_COUNT mutually-consistent events across at least
+     * QUARANTINE_CONFIRM_MS, it is treated as a genuine hardware re-baseline and we re-anchor to it
+     * with zero credit (the intervening steps are dropped, not fabricated, and are logged).
+     */
+    private fun handleImplausibleDelta(sensorValue: Float, elapsedMs: Long, delta: Int, dtSec: Long, cap: Long) {
+        val gapSinceQuarantine = ((elapsedMs - quarantineLastElapsedMs) / 1000).coerceAtLeast(0)
+        val consistentContinuation = quarantineActive &&
+            sensorValue >= quarantineValue &&
+            (sensorValue.toDouble() - quarantineValue.toDouble()) <= plausibleMax(gapSinceQuarantine)
+
+        if (consistentContinuation) {
+            quarantineCount++
+            quarantineValue = sensorValue
+            quarantineLastElapsedMs = elapsedMs
+        } else {
+            quarantineActive = true
+            quarantineCount = 1
+            quarantineValue = sensorValue
+            quarantineFirstElapsedMs = elapsedMs
+            quarantineLastElapsedMs = elapsedMs
+        }
+
+        Log.w(TAG, "implausible_delta d=$delta dt=${dtSec}s cap=$cap raw=$sensorValue " +
+                   "(quarantine $quarantineCount/$QUARANTINE_CONFIRM_COUNT)")
+
+        if (quarantineCount >= QUARANTINE_CONFIRM_COUNT &&
+            (elapsedMs - quarantineFirstElapsedMs) >= QUARANTINE_CONFIRM_MS) {
+            Log.w(TAG, "quarantine confirmed; re-anchoring to $sensorValue with zero credit")
+            reAnchor(sensorValue, elapsedMs, thisBootId)
         }
     }
 
@@ -198,7 +389,7 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     /**
      * Write all buffered steps to SQLite atomically.
      * M3: pendingSteps is written to SharedPreferences only after a successful DB insert.
-     * M4: private — external callers must not drive flushes directly.
+     * M4: private; external callers must not drive flushes directly.
      */
     private suspend fun flushPendingSteps() {
         // Atomically snapshot and zero the accumulator.
@@ -217,22 +408,39 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             )
         }
 
-        try {
+        val inserted: Boolean = try {
             val utcTimestamp = TimeStampUtils.getCurrentUtcTimestamp()
-            database.insertStepCount(toInsert, utcTimestamp)
-
-            // M3: write pendingSteps to prefs only after confirmed DB success
-            prefs.edit().putInt(KEY_PENDING_STEPS, pendingSteps.get()).apply()
-
-            Log.d(TAG, "Flushed $toInsert steps to DB at $utcTimestamp (UTC). Remaining: ${pendingSteps.get()}")
-
-            // M1: notify caller (BackgroundServiceManager) to refresh the notification
-            onFlushSuccess()
+            val uuid = database.insertStepCount(toInsert, utcTimestamp)
+            if (uuid == null) {
+                // EC-4: insert failed. insertStepCount returns null on BOTH a -1 rowId and a swallowed
+                // exception, so a null here is the only reliable failure signal. Restore the steps and
+                // do NOT report success, instead of the old code's silent loss + false "flushed" log.
+                pendingSteps.addAndGet(toInsert)
+                Log.e(TAG, "Flush failed (insert returned null); restored $toInsert to buffer")
+                false
+            } else {
+                // M3: persist the decremented buffer only after a confirmed DB write.
+                persistPending()
+                Log.d(TAG, "Flushed $toInsert steps to DB at $utcTimestamp (UTC). Remaining: ${pendingSteps.get()}")
+                true
+            }
         } catch (e: Exception) {
-            // DB write failed: restore snapshot so steps are never silently lost
+            // EC-14: restore ONLY toInsert. The deferred remainder was already re-added above; the
+            // original code added it a second time here, which double-counted it on the next flush.
             pendingSteps.addAndGet(toInsert)
-            if (toInsert < stepsToFlush) pendingSteps.addAndGet(stepsToFlush - toInsert)
-            Log.e(TAG, "Failed to flush steps to DB – restored $stepsToFlush to buffer: ${e.message}")
+            Log.e(TAG, "Failed to flush steps to DB; restored $toInsert to buffer: ${e.message}")
+            false
+        }
+
+        // M1: notify the caller (BackgroundServiceManager) to refresh the notification. EC-14: this is
+        // OUTSIDE the accounting try. If updateNotification() throws (OEM DeadSystemException under
+        // memory pressure), it must not trigger the catch above and re-flush already-persisted steps.
+        if (inserted) {
+            try {
+                onFlushSuccess()
+            } catch (e: Exception) {
+                Log.e(TAG, "onFlushSuccess (notification refresh) failed: ${e.message}")
+            }
         }
     }
 
@@ -381,7 +589,7 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             val dbData = if (lastSyncTimestamp != null) {
                 database.getTimelineDataAfter(lastSyncTimestamp)
             } else {
-                database.getTimelineData() // no filter — return everything
+                database.getTimelineData() // no filter: return everything
             }
 
             val responseData = dbData.map { entry ->

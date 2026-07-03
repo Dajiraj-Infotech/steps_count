@@ -5,23 +5,51 @@ import io.flutter.plugin.common.MethodChannel
 import org.mockito.Mockito
 import kotlin.test.Test
 
-/*
- * This demonstrates a simple unit test of the Kotlin portion of this plugin's implementation.
- *
- * Once you have built the plugin's example app, you can run these tests from the command
- * line by running `./gradlew testDebugUnitTest` in the `example/android/` directory, or
- * you can run them directly from IDEs that support JUnit such as Android Studio.
+/**
+ * Unit tests for the [StepsCountPlugin] method-channel contract that can run without an Android
+ * runtime (no started service, so the static manager is null and these paths take their default
+ * branches).
  */
-
 internal class StepsCountPluginTest {
-    @Test
-    fun onMethodCall_getPlatformVersion_returnsExpectedValue() {
+
+    private fun call(method: String): MethodChannel.Result {
         val plugin = StepsCountPlugin()
+        val result = Mockito.mock(MethodChannel.Result::class.java)
+        plugin.onMethodCall(MethodCall(method, null), result)
+        return result
+    }
 
-        val call = MethodCall("getPlatformVersion", null)
-        val mockResult: MethodChannel.Result = Mockito.mock(MethodChannel.Result::class.java)
-        plugin.onMethodCall(call, mockResult)
+    @Test
+    fun unknownMethod_reportsNotImplemented() {
+        val result = call("thisMethodDoesNotExist")
+        Mockito.verify(result).notImplemented()
+    }
 
-        Mockito.verify(mockResult).success("Android " + android.os.Build.VERSION.RELEASE)
+    @Test
+    fun getStepSources_isEmptyOnAndroid() {
+        // Step sources are an iOS/HealthKit concept; Android returns an empty list.
+        val result = call("getStepSources")
+        Mockito.verify(result).success(emptyList<Any>())
+    }
+
+    @Test
+    fun startStepObserver_isNoOpTrueOnAndroid() {
+        // iOS-only observer; Android treats it as a successful no-op.
+        val result = call("startStepObserver")
+        Mockito.verify(result).success(true)
+    }
+
+    @Test
+    fun getTodaysCount_isZeroWhenServiceNotRunning() {
+        // With no background service started, the static manager is null and the count is 0
+        // (rather than an error), so callers querying before start get a sane default.
+        val result = call("getTodaysCount")
+        Mockito.verify(result).success(0)
+    }
+
+    @Test
+    fun isServiceRunning_isFalseByDefault() {
+        val result = call("isServiceRunning")
+        Mockito.verify(result).success(false)
     }
 }

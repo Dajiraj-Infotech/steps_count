@@ -228,7 +228,9 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             val manager = stepCountManager
             if (sensorEvent.sensor.type == Sensor.TYPE_STEP_COUNTER && manager != null) {
                 val sensorValue = sensorEvent.values[0]
-                manager.onSensorChanged(sensorValue)
+                // Forward the hardware event timestamp (nanoseconds since boot, valid even for
+                // FIFO-batched events). The manager needs it to rate-gate deltas by real elapsed time.
+                manager.onSensorChanged(sensorValue, sensorEvent.timestamp)
                 Log.d(TAG, "Step sensor value: $sensorValue")
             }
         }
