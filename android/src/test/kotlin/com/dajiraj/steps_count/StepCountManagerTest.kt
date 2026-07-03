@@ -94,4 +94,44 @@ internal class StepCountManagerTest {
         assertFalse(StepCountManager.isAcceptableSensorValue(4.294_967_3e9f))
         assertFalse(StepCountManager.isAcceptableSensorValue(Float.MAX_VALUE))
     }
+
+    // ---- Anchor model: computeCredit(last, anchor) (Phase 2) -----------------------------------
+
+    @Test
+    fun computeCredit_basic() {
+        assertEquals(5L, StepCountManager.computeCredit(1005.0, 1000.0))
+        assertEquals(0L, StepCountManager.computeCredit(1000.0, 1000.0))
+    }
+
+    @Test
+    fun computeCredit_flooringAndNegative() {
+        assertEquals(5L, StepCountManager.computeCredit(1005.9, 1000.0)) // floor, never over-credit
+        assertEquals(0L, StepCountManager.computeCredit(1000.7, 1000.0)) // sub-1-step fraction not booked
+        assertEquals(0L, StepCountManager.computeCredit(999.0, 1000.0))  // counter behind anchor -> 0
+    }
+
+    @Test
+    fun computeCredit_nanMeansNoAnchor() {
+        assertEquals(0L, StepCountManager.computeCredit(Double.NaN, 1000.0))
+        assertEquals(0L, StepCountManager.computeCredit(1000.0, Double.NaN))
+    }
+
+    // ---- Anchor model: splitIntoRowChunks(credit, maxPerRow) -----------------------------------
+
+    @Test
+    fun splitIntoRowChunks_splitsAndPreservesSum() {
+        assertEquals(listOf(30), StepCountManager.splitIntoRowChunks(30, 50_000))
+        assertEquals(listOf(50_000), StepCountManager.splitIntoRowChunks(50_000, 50_000))
+        assertEquals(listOf(50_000, 1), StepCountManager.splitIntoRowChunks(50_001, 50_000))
+        assertEquals(listOf(50_000, 50_000, 20_000), StepCountManager.splitIntoRowChunks(120_000, 50_000))
+        assertEquals(emptyList(), StepCountManager.splitIntoRowChunks(0, 50_000))
+    }
+
+    @Test
+    fun splitIntoRowChunks_sumAlwaysEqualsCredit() {
+        for (credit in longArrayOf(1, 49, 50_000, 50_001, 123_456, 1_000_000)) {
+            val sum = StepCountManager.splitIntoRowChunks(credit, 50_000).sumOf { it.toLong() }
+            assertEquals(credit, sum, "chunk sum must equal credit ($credit)")
+        }
+    }
 }

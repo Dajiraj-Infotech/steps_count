@@ -5,48 +5,54 @@ import android.content.SharedPreferences
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import io.flutter.plugin.common.MethodChannel
-import java.util.*
-import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /**
  * Manages step counting logic and database operations.
  *
- * Phase 1 robustness (anti-spike) design. The TYPE_STEP_COUNTER sensor reports cumulative steps
- * since boot, and several real-world conditions used to turn that into phantom single-entry spikes
- * of 1k to 50k steps. This class now defends against them at the point of ingestion:
+ * Phase 2 durability model (the "anchor is a cursor into the hardware WAL" design):
  *
- *  1. Garbage gate: non-finite, negative, or absurd (> 1e9) sensor values are dropped before any
- *     arithmetic, so a hub glitch (uint32-as-float, Float.MAX_VALUE, Infinity) can never be booked.
- *  2. Boot-session anchoring: the baseline is tagged with BOOT_COUNT + ANDROID_ID. If it was saved
- *     under a different boot session or device (missed reboot, Auto Backup restore, reinstall), it
- *     is radioactive and we re-anchor with zero credit instead of booking the arbitrary difference.
- *  3. Rate gate: a delta faster than a human can physically walk over the elapsed time since the
- *     last event is quarantined (anchor frozen, nothing credited), not capped-and-added.
+ *  - Within a boot session the TYPE_STEP_COUNTER cumulative counter IS a write-ahead log. The DB
+ *    holds a single durable cursor into it (the anchor). Every flush inserts the step rows AND
+ *    advances the anchor in ONE SQLite transaction, so steps are credited exactly once.
+ *  - Unflushed steps are DERIVED: `unflushed = lastEventCounter - anchorCounter`. Losing the
+ *    in-memory buffer to a process kill costs nothing; the hardware re-delivers the same cumulative
+ *    value and the delta is recomputed. So in-session loss is zero regardless of OEM kills (EC-12),
+ *    and a DB write failure just leaves the anchor unmoved and retries (EC-4).
+ *  - SharedPreferences is out of the counting path entirely, which removes the prefs-vs-DB
+ *    durability races (EC-5/EC-6/EC-13/EC-14). All DB work runs on a single-threaded dispatcher, so
+ *    flushes are single-flight by construction and never overlap (EC-13/EC-40).
  *
- * Honest Phase 1 limits (addressed in later phases): steps are still stamped at flush time rather
- * than at their true event time (time attribution is Phase 3), and the pending-buffer durability
- * protocol (exactly-once anchor-in-transaction) is Phase 2. See docs/robust_step_counting_spec.md.
+ * Phase 1 anti-spike defenses are retained: garbage gate (EC-1/EC-48), boot-session anchoring
+ * (EC-2/EC-11), and the rate gate + quarantine (EC-3). Honest limits still open for later phases:
+ * steps are stamped at flush time, not event time (attribution is Phase 3); storage is still
+ * credential-encrypted (device-protected storage + direct boot is Phase 4). See
+ * docs/robust_step_counting_spec.md.
  */
 class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit = {}) {
     companion object {
         private const val TAG = "StepCountManager"
         private const val PREFS_NAME = "steps_count_prefs"
+        // Legacy Phase 1 prefs keys, read once to migrate into the tracker_state anchor.
         private const val KEY_LAST_SENSOR_VALUE = "last_sensor_value"
         private const val KEY_IS_INITIALIZED = "is_initialized"
         private const val KEY_PENDING_STEPS = "pending_steps"
-        // Phase 1: baseline identity + monotonic time of the last processed event.
-        private const val KEY_LAST_EVENT_ELAPSED = "last_event_elapsed"
         private const val KEY_BOOT_ID = "boot_id"
+        private const val KEY_MIGRATED_TO_ANCHOR = "migrated_to_anchor_v2"
 
         // Flush thresholds
         private const val FLUSH_STEP_THRESHOLD = 50
@@ -56,16 +62,14 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
          * Garbage gate (EC-1/EC-48): reject non-finite/negative/absurd cumulative values BEFORE
          * computing a delta. 1e9 is ~4 steps/sec for 8 years of continuous uptime, comfortably above
          * any real lifetime count while still rejecting uint32-as-float (4.29e9), Float.MAX_VALUE and
-         * +Infinity. This replaces the old "cap the delta to 500k and add it as real steps" logic,
-         * which was itself a primary spike source.
+         * +Infinity. Replaces the old "cap the delta to 500k and add it as real steps" spike source.
          */
         private const val GARBAGE_ABS_MAX = 1.0e9f
 
         /**
          * Rate gate (EC-3): the physically-plausible step ceiling for an elapsed interval. Burst
-         * ceiling of 5 steps/sec (above world-record cadence, ~2x a hard run) for the first hour,
-         * then 1.2 steps/sec sustained, plus a small constant slack. Replaces the static
-         * MAX_REASONABLE_DELTA = 500_000, which was ~1000x too loose to catch anything real.
+         * ceiling of 5 steps/sec (above world-record cadence) for the first hour, then 1.2 steps/sec
+         * sustained, plus a small constant slack. Replaces the static MAX_REASONABLE_DELTA = 500_000.
          */
         private const val RATE_BURST_PER_SEC = 5.0
         private const val RATE_SUSTAINED_PER_SEC = 1.2
@@ -74,24 +78,20 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
 
         /**
          * Quarantine (EC-1/EC-3): when a delta is implausible we freeze the anchor and credit nothing.
-         * If the high value PERSISTS for this many mutually-consistent events across at least this much
-         * time, it is treated as a genuine (rare) hardware re-baseline and we re-anchor to it with zero
-         * credit. A transient glitch never reaches confirmation, so it costs nothing.
+         * If the high value persists for this many mutually-consistent events across at least this much
+         * time, it is treated as a genuine (rare) hardware re-baseline and we re-anchor with zero credit.
          */
         private const val QUARANTINE_CONFIRM_COUNT = 3
         private const val QUARANTINE_CONFIRM_MS = 600_000L // 10 minutes
 
-        /**
-         * Cap per DB row for hygiene; excess is deferred to next flush (no step loss). Real deltas are
-         * now bounded by the rate gate, so this is only reached by long legitimate catch-ups.
-         */
+        /** Cap per DB row for hygiene; a large credit is split into several rows in one transaction. */
         private const val MAX_STEPS_PER_ROW = 50_000
 
-        /** Delta above this is logged as batch_detected (OEM batching evidence; logs only, not DB). */
+        /** Delta above this is logged as batch_detected (OEM batching evidence; logs only). */
         private const val BATCH_DETECTION_THRESHOLD = FLUSH_STEP_THRESHOLD * 5
 
-        /** Cap in-memory buffer to avoid Integer overflow when summing many large deltas. */
-        private const val MAX_PENDING_STEPS = 1_000_000
+        /** Upper bound on the blocking final flush at stop, so a slow disk cannot ANR the service. */
+        private const val FINAL_FLUSH_TIMEOUT_MS = 2_000L
 
         var stepCountChannel: MethodChannel? = null
 
@@ -109,92 +109,158 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
 
         /** True if [v] is a usable cumulative sensor reading. Pure function, exposed for unit testing. */
         fun isAcceptableSensorValue(v: Float): Boolean = v.isFinite() && v >= 0f && v <= GARBAGE_ABS_MAX
+
+        /**
+         * Steps to credit at a flush given the latest cumulative value and the durable anchor. Pure
+         * function, exposed for unit testing. NaN operands (no anchor yet) yield 0.
+         */
+        fun computeCredit(lastEventCounter: Double, anchorCounter: Double): Long {
+            if (lastEventCounter.isNaN() || anchorCounter.isNaN()) return 0
+            return floor(lastEventCounter - anchorCounter).toLong().coerceAtLeast(0)
+        }
+
+        /**
+         * Split a credit into per-row chunks of at most [maxPerRow] (DB hygiene). Pure function,
+         * exposed for unit testing. The chunk sum always equals [credit].
+         */
+        fun splitIntoRowChunks(credit: Long, maxPerRow: Int): List<Int> {
+            if (credit <= 0 || maxPerRow <= 0) return emptyList()
+            val chunks = ArrayList<Int>()
+            var remaining = credit
+            while (remaining > 0) {
+                val c = minOf(remaining, maxPerRow.toLong()).toInt()
+                chunks.add(c)
+                remaining -= c
+            }
+            return chunks
+        }
     }
 
-    private val database = StepCountDatabase(context)
+    // Never-closed process singleton (EC-40). Phase 4 will pass a device-protected-storage context.
+    private val database = StepCountDatabase.getInstance(context)
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    // H2: SupervisorJob ensures a failing child coroutine does not cancel the flush loop
-    private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // Boot-session identity for THIS process (constant for the process lifetime: a reboot kills the
-    // process). Computed once to avoid a content-provider query on every sensor event.
+    // H2: SupervisorJob so a failing child coroutine does not cancel the flush loop.
+    private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // All DB mutations run here: at most one at a time, so flushes are single-flight and never overlap
+    // (EC-13). A Mutex additionally guards the read-modify-write of the anchor mirror across query reads.
+    private val dbDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val stateMutex = Mutex()
+
+    // Boot-session identity for THIS process (constant for the process lifetime).
     private val thisBootId: String = computeBootId(context.applicationContext)
 
-    // Baseline state: always read/written on the sensor callback thread only (C1).
-    private var lastSensorValue: Float = 0f
-    private var isInitialized = false
-    // Boot id under which lastSensorValue was recorded, and the monotonic (elapsedRealtime) time of the
-    // last processed event. Both persist across process death so the rate gate has a real dt on restart.
-    private var lastBootId: String = ""
-    private var lastEventElapsedMs: Long = -1L
+    // Durable anchor mirror (authoritative copy is tracker_state in SQLite). Written only on
+    // dbDispatcher after a committed transaction; read from other threads, hence @Volatile.
+    @Volatile private var anchorCounter: Double = Double.NaN // NaN = no anchor yet
+    @Volatile private var anchorElapsedMs: Long = 0L
+    @Volatile private var anchorWallMs: Long = 0L
+    @Volatile private var anchorBootId: String = ""
+    @Volatile private var lastRowEndMs: Long = 0L
 
-    // Quarantine state for implausible deltas (EC-3). The anchor is frozen while active.
+    // Latest accepted event (non-authoritative; re-derivable from the hardware counter). Written on
+    // the sensor thread, read on dbDispatcher, hence @Volatile.
+    @Volatile private var lastEventCounter: Double = Double.NaN
+    @Volatile private var lastEventElapsedMs: Long = -1L
+
+    // Quarantine state for implausible deltas (EC-3): read/written only on the sensor thread.
     private var quarantineActive = false
     private var quarantineCount = 0
     private var quarantineValue = 0f
     private var quarantineFirstElapsedMs = 0L
     private var quarantineLastElapsedMs = 0L
 
-    // In-memory accumulator: steps not yet written to SQLite.
-    // AtomicInteger ensures thread-safe read-modify-write between the
-    // sensor callback thread and flush coroutines.
-    private val pendingSteps = AtomicInteger(0)
-
     // Periodic flush job
     private var flushJob: Job? = null
 
     init {
-        loadState()
+        recoverOnStart()
         startPeriodicFlush()
     }
 
-    /**
-     * Load saved state from SharedPreferences
-     */
-    private fun loadState() {
-        lastSensorValue = prefs.getFloat(KEY_LAST_SENSOR_VALUE, 0f)
-        isInitialized = prefs.getBoolean(KEY_IS_INITIALIZED, false)
-        // Recover steps buffered but not yet flushed to DB before last process death
-        pendingSteps.set(prefs.getInt(KEY_PENDING_STEPS, 0))
-        lastEventElapsedMs = prefs.getLong(KEY_LAST_EVENT_ELAPSED, -1L)
-        lastBootId = prefs.getString(KEY_BOOT_ID, "") ?: ""
-
-        Log.d(
-            TAG, "State loaded - lastSensorValue: $lastSensorValue, isInitialized: $isInitialized, " +
-                 "pendingSteps: ${pendingSteps.get()}, lastBootId: $lastBootId, thisBootId: $thisBootId"
-        )
-    }
+    // ---- Startup recovery -----------------------------------------------------------------------
 
     /**
-     * Persist baseline + identity + pending buffer to SharedPreferences in a single edit.
-     * Called only from the sensor callback thread (never from a coroutine).
-     *
-     * The baseline (lastSensorValue) advances IMMEDIATELY in onSensorChanged(), before any DB write.
-     * Persisting pendingSteps here too (not only after a flush) shrinks the crash-loss window for
-     * buffered steps. The full exactly-once durability protocol (anchor-in-transaction) is Phase 2.
+     * Load the durable anchor and reconcile it with the current boot session. Migrates any Phase 1
+     * prefs baseline into the anchor the first time this build runs.
      */
-    private fun saveBaseline() {
-        prefs.edit().apply {
-            putFloat(KEY_LAST_SENSOR_VALUE, lastSensorValue)
-            putBoolean(KEY_IS_INITIALIZED, isInitialized)
-            putLong(KEY_LAST_EVENT_ELAPSED, lastEventElapsedMs)
-            putString(KEY_BOOT_ID, lastBootId)
-            putInt(KEY_PENDING_STEPS, pendingSteps.get())
-            apply()
+    private fun recoverOnStart() {
+        migrateLegacyPrefsIfNeeded()
+
+        val st = database.readTrackerState()
+        if (st == null || st.anchorCounter.isNaN()) {
+            // No anchor yet: the first event will anchor with zero credit.
+            anchorCounter = Double.NaN
+            lastEventCounter = Double.NaN
+            Log.d(TAG, "recoverOnStart: NO_ANCHOR (fresh)")
+            return
+        }
+
+        if (st.bootId.isEmpty() || st.bootId == thisBootId) {
+            // Same boot session (or a legacy anchor with no boot id): trust it. The first event's
+            // delta re-derives any steps that were unflushed when the process last died (EC-12).
+            anchorCounter = st.anchorCounter
+            anchorElapsedMs = st.anchorElapsedMs
+            anchorWallMs = st.anchorWallMs
+            anchorBootId = if (st.bootId.isEmpty()) thisBootId else st.bootId
+            lastRowEndMs = st.lastRowEndMs
+            lastEventCounter = st.anchorCounter
+            lastEventElapsedMs = st.anchorElapsedMs
+            Log.d(TAG, "recoverOnStart: ANCHORED at ${st.anchorCounter} (boot=$anchorBootId)")
+        } else {
+            // Different boot session or device (missed reboot, restore, reinstall). The anchor is
+            // radioactive (EC-2/EC-11): void it so the first event re-anchors with zero credit. Step
+            // history rows are kept (real data).
+            Log.w(TAG, "recoverOnStart: boot/device changed (${st.bootId} -> $thisBootId); voiding anchor")
+            anchorCounter = Double.NaN
+            lastEventCounter = Double.NaN
         }
     }
 
-    /** Persist just the pending buffer (used by the flush path after a confirmed DB write). */
-    private fun persistPending() {
-        prefs.edit().putInt(KEY_PENDING_STEPS, pendingSteps.get()).apply()
+    /**
+     * One-time migration of the Phase 1 SharedPreferences baseline into the tracker_state anchor.
+     * Preserves any un-flushed Phase 1 steps by booking them as a row, and seeds the anchor so the
+     * next delta continues from the old baseline without a spike or a loss.
+     */
+    private fun migrateLegacyPrefsIfNeeded() {
+        if (prefs.getBoolean(KEY_MIGRATED_TO_ANCHOR, false)) return
+        val existing = database.readTrackerState()
+        val wasInitialized = prefs.getBoolean(KEY_IS_INITIALIZED, false)
+
+        if (existing != null && !existing.anchorCounter.isNaN()) {
+            // An anchor already exists (nothing to migrate); just mark done.
+            prefs.edit().putBoolean(KEY_MIGRATED_TO_ANCHOR, true).apply()
+            return
+        }
+
+        if (wasInitialized) {
+            val baseline = prefs.getFloat(KEY_LAST_SENSOR_VALUE, 0f).toDouble()
+            val pending = prefs.getInt(KEY_PENDING_STEPS, 0).coerceAtLeast(0)
+            val oldBootId = prefs.getString(KEY_BOOT_ID, "") ?: ""
+            val now = TimeStampUtils.getCurrentUtcTimestamp()
+            // Book any un-flushed Phase 1 steps so they are not lost, then anchor at the old baseline.
+            val chunks = splitIntoRowChunks(pending.toLong(), MAX_STEPS_PER_ROW)
+            val seeded = AnchorState(
+                anchorCounter = baseline,
+                anchorElapsedMs = 0L,
+                anchorWallMs = now,
+                bootId = if (oldBootId.isNotEmpty()) oldBootId else thisBootId,
+                lastRowEndMs = now
+            )
+            val ok = database.commitFlush(chunks, now, seeded)
+            Log.d(TAG, "Legacy prefs migrated: baseline=$baseline pending=$pending ok=$ok")
+        }
+
+        prefs.edit()
+            .putBoolean(KEY_MIGRATED_TO_ANCHOR, true)
+            .remove(KEY_LAST_SENSOR_VALUE)
+            .remove(KEY_PENDING_STEPS)
+            .remove(KEY_IS_INITIALIZED)
+            .remove(KEY_BOOT_ID)
+            .apply()
     }
 
-    /**
-     * Boot-session fingerprint: BOOT_COUNT (changes on every reboot, API 24+) plus ANDROID_ID
-     * (changes across devices / reinstall on a different device). A baseline whose stored fingerprint
-     * differs from the current one cannot be trusted for a delta.
-     */
     private fun computeBootId(ctx: Context): String {
         val cr = ctx.contentResolver
         val bootCount = try {
@@ -215,123 +281,87 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         quarantineCount = 0
     }
 
-    /**
-     * Re-establish the baseline at [sensorValue] with ZERO credit for anything before it, flushing any
-     * already-buffered (real) steps first so they are not lost. Used on first init, on a boot/device
-     * change, and on a confirmed quarantine. Never books the difference between the old and new
-     * baseline: that difference is exactly the phantom-spike vector.
-     */
-    private fun reAnchor(sensorValue: Float, elapsedMs: Long, bootId: String) {
-        lastSensorValue = sensorValue
-        lastEventElapsedMs = elapsedMs
-        lastBootId = bootId
-        isInitialized = true
-        clearQuarantine()
-        // Persist the new baseline BEFORE launching the flush, so the flush's post-drain
-        // persistPending(0) cannot be overwritten by this save re-writing the old pending value.
-        saveBaseline()
-        coroutineScope.launch { flushPendingSteps() } // book any already-buffered (real) steps
-        stepCountChannel?.invokeMethod("onSensorChanged", null)
-    }
+    private fun unflushed(): Long = computeCredit(lastEventCounter, anchorCounter)
+
+    // ---- Sensor ingestion (sensor callback thread) ----------------------------------------------
 
     /**
-     * Process new sensor data and update step count.
-     * Steps are accumulated in-memory; DB writes happen in batches.
+     * Process new sensor data.
      *
-     * @param sensorValue The raw cumulative value from the TYPE_STEP_COUNTER sensor (steps since boot).
-     * @param eventTimestampNanos The hardware event timestamp (nanoseconds on the elapsedRealtime clock).
-     *   Used only to rate-gate the delta by real elapsed time; 0 (unknown) falls back to "now".
+     * @param sensorValue The raw cumulative value from TYPE_STEP_COUNTER (steps since boot).
+     * @param eventTimestampNanos The hardware event timestamp (ns on the elapsedRealtime clock), used
+     *   to rate-gate the delta by real elapsed time; 0 (unknown) falls back to "now".
      */
     fun onSensorChanged(sensorValue: Float, eventTimestampNanos: Long = 0L) {
         try {
-            // (1) Garbage gate (EC-1/EC-48): drop unusable values before any arithmetic so a hub
-            // glitch can neither be credited nor corrupt the baseline.
+            // (1) Garbage gate (EC-1/EC-48).
             if (!isAcceptableSensorValue(sensorValue)) {
-                Log.w(TAG, "garbage_value raw=$sensorValue rejected (baseline untouched)")
+                Log.w(TAG, "garbage_value raw=$sensorValue rejected (anchor untouched)")
                 return
             }
 
             val nowElapsed = SystemClock.elapsedRealtime()
             val evElapsed = eventTimestampNanos / 1_000_000
-            // Guard against bogus HAL timestamps (future-dated or epoch-based): fall back to now.
             val elapsedMs = if (evElapsed in 1..(nowElapsed + 10_000)) evElapsed else nowElapsed
+            val v = sensorValue.toDouble()
 
-            // (2) First-ever initialization: anchor with zero credit.
-            if (!isInitialized) {
-                reAnchor(sensorValue, elapsedMs, thisBootId)
-                Log.d(TAG, "Initialized with sensor value: $sensorValue (boot=$thisBootId)")
+            // (2) No anchor yet (fresh install, corruption recovery, or voided radioactive baseline):
+            // anchor here with zero credit.
+            if (anchorCounter.isNaN()) {
+                anchorHere(v, elapsedMs)
+                Log.d(TAG, "Anchored (zero credit) at $v (boot=$thisBootId)")
                 return
             }
 
-            // (3) Boot-session anchoring (EC-2/EC-11). A baseline recorded under a different boot
-            // count or device (missed reboot, Auto Backup restore, reinstall-on-new-device) is
-            // radioactive: re-anchor with zero credit instead of booking the arbitrary difference.
-            if (lastBootId.isEmpty()) {
-                // Upgrade from a pre-boot-tracking build: adopt the current fingerprint and keep the
-                // baseline. Any stale-baseline delta is now bounded by the rate gate, so no spike.
-                lastBootId = thisBootId
-                saveBaseline()
-            } else if (lastBootId != thisBootId) {
-                Log.w(TAG, "boot/device changed ($lastBootId -> $thisBootId): re-anchoring with zero credit")
-                reAnchor(sensorValue, elapsedMs, thisBootId)
+            // (3) Defensive in-process boot/device change (recoverOnStart normally handles this).
+            if (anchorBootId.isNotEmpty() && anchorBootId != thisBootId) {
+                Log.w(TAG, "boot/device changed in-process ($anchorBootId -> $thisBootId); re-anchoring")
+                anchorHere(v, elapsedMs)
                 return
             }
 
-            // H1: compute delta in Double to avoid Float precision loss at high cumulative counts
-            val stepDifference = (sensorValue.toDouble() - lastSensorValue.toDouble()).roundToInt()
+            val ref = if (lastEventCounter.isNaN()) anchorCounter else lastEventCounter
+            val refElapsed = if (lastEventElapsedMs >= 0) lastEventElapsedMs else anchorElapsedMs
+            val delta = (v - ref).roundToInt()
 
-            if (stepDifference == 0) {
-                // Duplicate / heartbeat value (EC-51): nothing to credit.
-                stepCountChannel?.invokeMethod("onSensorChanged", null)
+            if (delta == 0) {
+                stepCountChannel?.invokeMethod("onSensorChanged", null) // heartbeat (EC-51)
                 return
             }
 
-            if (stepDifference < 0) {
-                // Negative delta WITHOUT a boot change = in-session hardware counter reset (EC-49:
-                // hub thermal/watchdog restart). Re-baseline; Phase 1 does not recover the pre-reset gap.
-                Log.w(TAG, "counter_reset old=$lastSensorValue new=$sensorValue; re-baselining")
-                lastSensorValue = sensorValue
-                lastEventElapsedMs = elapsedMs
+            if (delta < 0) {
+                // Negative delta without a boot change = in-session hardware counter reset (EC-49).
+                // Flush what was already delivered, then re-anchor to the new low value (zero credit
+                // for the reset gap). lastEventCounter is left high so the flush credits the real steps.
+                Log.w(TAG, "counter_reset ref=$ref new=$v; flush then re-anchor")
                 clearQuarantine()
-                saveBaseline()
-                coroutineScope.launch { flushPendingSteps() } // book whatever was already buffered
+                coroutineScope.launch(dbDispatcher) {
+                    flushLocked()
+                    anchorToLocked(v, elapsedMs)
+                }
                 stepCountChannel?.invokeMethod("onSensorChanged", null)
                 return
             }
 
-            // stepDifference > 0
-            if (stepDifference > BATCH_DETECTION_THRESHOLD) {
-                Log.d(TAG, "batch_detected delta=$stepDifference (threshold=$BATCH_DETECTION_THRESHOLD)")
+            if (delta > BATCH_DETECTION_THRESHOLD) {
+                Log.d(TAG, "batch_detected delta=$delta (threshold=$BATCH_DETECTION_THRESHOLD)")
             }
 
-            // (4) Rate gate (EC-3). dt is the monotonic elapsed time since the last processed event;
-            // a delta above the physically-plausible ceiling for that window is quarantined, not booked.
-            val dtSec = if (lastEventElapsedMs in 0 until elapsedMs) (elapsedMs - lastEventElapsedMs) / 1000 else 0L
+            // (4) Rate gate (EC-3).
+            val dtSec = if (refElapsed in 0 until elapsedMs) (elapsedMs - refElapsed) / 1000 else 0L
             val cap = plausibleMax(dtSec)
-            if (stepDifference > cap) {
-                handleImplausibleDelta(sensorValue, elapsedMs, stepDifference, dtSec, cap)
-                return // anchor NOT advanced, nothing credited (no cap-and-add)
+            if (delta > cap) {
+                handleImplausibleDelta(sensorValue, elapsedMs, delta, dtSec, cap)
+                return // anchor NOT advanced, nothing credited
             }
 
-            // (5) Plausible, real steps. Clear any quarantine and credit them.
+            // (5) Plausible: accept. Advancing lastEventCounter increases derived unflushed; the flush
+            // books it and advances the anchor transactionally.
             clearQuarantine()
-            lastSensorValue = sensorValue
+            lastEventCounter = v
             lastEventElapsedMs = elapsedMs
-
-            // Cap running total to avoid Integer overflow (use Long math for the comparison).
-            val current = pendingSteps.get()
-            val addCapped = ((current.toLong() + stepDifference).coerceAtMost(MAX_PENDING_STEPS.toLong())).toInt() - current
-            if (addCapped > 0) {
-                pendingSteps.addAndGet(addCapped)
-                Log.d(TAG, "Steps buffered: $addCapped, Pending: ${pendingSteps.get()}")
-            }
-            if (addCapped < stepDifference) {
-                Log.w(TAG, "Pending steps capped at $MAX_PENDING_STEPS; dropped ${stepDifference - addCapped} from this event.")
-            }
-            saveBaseline() // persists baseline + identity + pending in one edit
-
-            if (pendingSteps.get() >= FLUSH_STEP_THRESHOLD) {
-                coroutineScope.launch { flushPendingSteps() }
+            if (unflushed() >= FLUSH_STEP_THRESHOLD) {
+                coroutineScope.launch(dbDispatcher) { flushLocked() }
             }
             stepCountChannel?.invokeMethod("onSensorChanged", null)
         } catch (e: Exception) {
@@ -340,11 +370,9 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     }
 
     /**
-     * Handle a delta that exceeded the physical-rate cap. The anchor is FROZEN (baseline not advanced)
-     * and nothing is credited, so a transient glitch produces zero phantom steps. If the high value
-     * persists for QUARANTINE_CONFIRM_COUNT mutually-consistent events across at least
-     * QUARANTINE_CONFIRM_MS, it is treated as a genuine hardware re-baseline and we re-anchor to it
-     * with zero credit (the intervening steps are dropped, not fabricated, and are logged).
+     * Handle a delta that exceeded the physical-rate cap. The anchor is FROZEN and nothing is
+     * credited (no cap-and-add). A persistent high value (QUARANTINE_CONFIRM_COUNT consistent events
+     * over QUARANTINE_CONFIRM_MS) is adopted as a genuine hardware re-baseline with zero credit.
      */
     private fun handleImplausibleDelta(sensorValue: Float, elapsedMs: Long, delta: Int, dtSec: Long, cap: Long) {
         val gapSinceQuarantine = ((elapsedMs - quarantineLastElapsedMs) / 1000).coerceAtLeast(0)
@@ -370,115 +398,118 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         if (quarantineCount >= QUARANTINE_CONFIRM_COUNT &&
             (elapsedMs - quarantineFirstElapsedMs) >= QUARANTINE_CONFIRM_MS) {
             Log.w(TAG, "quarantine confirmed; re-anchoring to $sensorValue with zero credit")
-            reAnchor(sensorValue, elapsedMs, thisBootId)
+            clearQuarantine()
+            anchorHere(sensorValue.toDouble(), elapsedMs)
         }
     }
 
-    /**
-     * Start a coroutine that flushes the pending buffer every FLUSH_INTERVAL_MS.
-     */
+    /** Set the anchor to [v] with zero credit (sensor thread): update the mirror now, persist async. */
+    private fun anchorHere(v: Double, elapsedMs: Long) {
+        anchorCounter = v
+        anchorElapsedMs = elapsedMs
+        anchorWallMs = TimeStampUtils.getCurrentUtcTimestamp()
+        anchorBootId = thisBootId
+        lastEventCounter = v
+        lastEventElapsedMs = elapsedMs
+        clearQuarantine()
+        coroutineScope.launch(dbDispatcher) { anchorToLocked(v, elapsedMs) }
+        stepCountChannel?.invokeMethod("onSensorChanged", null)
+    }
+
+    // ---- Flush and anchor (dbDispatcher: serialized, single-flight) ------------------------------
+
     private fun startPeriodicFlush() {
-        flushJob = coroutineScope.launch {
+        flushJob = coroutineScope.launch(dbDispatcher) {
             while (true) {
                 delay(FLUSH_INTERVAL_MS)
-                flushPendingSteps()
+                flushLocked()
             }
         }
     }
 
     /**
-     * Write all buffered steps to SQLite atomically.
-     * M3: pendingSteps is written to SharedPreferences only after a successful DB insert.
-     * M4: private; external callers must not drive flushes directly.
+     * Book the derived credit (lastEventCounter - anchorCounter) by inserting rows and advancing the
+     * anchor in one transaction. Runs only on dbDispatcher (single-flight). On failure the anchor is
+     * not advanced, so the credit stays derivable and is retried on the next flush (EC-4/EC-6/EC-14).
      */
-    private suspend fun flushPendingSteps() {
-        // Atomically snapshot and zero the accumulator.
-        // Any steps added by the sensor thread AFTER this point go into the next flush.
-        val stepsToFlush = pendingSteps.getAndSet(0)
-        if (stepsToFlush <= 0) return
+    private suspend fun flushLocked() = stateMutex.withLock {
+        val last = lastEventCounter
+        val anchor = anchorCounter
+        val credit = computeCredit(last, anchor)
+        if (credit <= 0) return@withLock
 
-        // Cap per row only to avoid overflow/absurd values (e.g. Integer.MAX_VALUE). OEM batching
-        // can legitimately produce large single-row entries; we don't cap those away.
-        val toInsert = stepsToFlush.coerceAtMost(MAX_STEPS_PER_ROW)
-        if (toInsert < stepsToFlush) {
-            pendingSteps.addAndGet(stepsToFlush - toInsert)
-            Log.w(
-                TAG,
-                "Flush capped to $MAX_STEPS_PER_ROW; ${stepsToFlush - toInsert} steps deferred to next flush."
-            )
-        }
-
-        val inserted: Boolean = try {
-            val utcTimestamp = TimeStampUtils.getCurrentUtcTimestamp()
-            val uuid = database.insertStepCount(toInsert, utcTimestamp)
-            if (uuid == null) {
-                // EC-4: insert failed. insertStepCount returns null on BOTH a -1 rowId and a swallowed
-                // exception, so a null here is the only reliable failure signal. Restore the steps and
-                // do NOT report success, instead of the old code's silent loss + false "flushed" log.
-                pendingSteps.addAndGet(toInsert)
-                Log.e(TAG, "Flush failed (insert returned null); restored $toInsert to buffer")
-                false
-            } else {
-                // M3: persist the decremented buffer only after a confirmed DB write.
-                persistPending()
-                Log.d(TAG, "Flushed $toInsert steps to DB at $utcTimestamp (UTC). Remaining: ${pendingSteps.get()}")
-                true
-            }
-        } catch (e: Exception) {
-            // EC-14: restore ONLY toInsert. The deferred remainder was already re-added above; the
-            // original code added it a second time here, which double-counted it on the next flush.
-            pendingSteps.addAndGet(toInsert)
-            Log.e(TAG, "Failed to flush steps to DB; restored $toInsert to buffer: ${e.message}")
-            false
-        }
-
-        // M1: notify the caller (BackgroundServiceManager) to refresh the notification. EC-14: this is
-        // OUTSIDE the accounting try. If updateNotification() throws (OEM DeadSystemException under
-        // memory pressure), it must not trigger the catch above and re-flush already-persisted steps.
-        if (inserted) {
+        val now = TimeStampUtils.getCurrentUtcTimestamp()
+        val chunks = splitIntoRowChunks(credit, MAX_STEPS_PER_ROW)
+        val newAnchor = AnchorState(
+            anchorCounter = last,
+            anchorElapsedMs = lastEventElapsedMs,
+            anchorWallMs = now,
+            bootId = thisBootId,
+            lastRowEndMs = now
+        )
+        val ok = database.commitFlush(chunks, now, newAnchor)
+        if (ok) {
+            anchorCounter = last
+            anchorElapsedMs = lastEventElapsedMs
+            anchorWallMs = now
+            anchorBootId = thisBootId
+            lastRowEndMs = now
+            Log.d(TAG, "Flushed $credit steps at $now (UTC). anchor=$last")
+            // Notification refresh is outside the transaction; a throw here cannot re-flush (EC-14).
             try {
                 onFlushSuccess()
             } catch (e: Exception) {
                 Log.e(TAG, "onFlushSuccess (notification refresh) failed: ${e.message}")
             }
+        } else {
+            Log.e(TAG, "Flush failed (rolled back); $credit steps stay derivable, will retry")
         }
     }
 
-    /**
-     * Run a full WAL checkpoint on the same DB instance used for step data.
-     * Call before copying the database file for export so the copy is consistent.
-     *
-     * @return true if checkpoint completed successfully, false otherwise
-     */
+    /** Re-anchor to [v] with zero credit (dbDispatcher): persist the anchor, then mirror it. */
+    private suspend fun anchorToLocked(v: Double, elapsedMs: Long) = stateMutex.withLock {
+        val now = TimeStampUtils.getCurrentUtcTimestamp()
+        val newAnchor = AnchorState(
+            anchorCounter = v,
+            anchorElapsedMs = elapsedMs,
+            anchorWallMs = now,
+            bootId = thisBootId,
+            lastRowEndMs = maxOf(lastRowEndMs, 0L)
+        )
+        if (database.setAnchor(newAnchor)) {
+            anchorCounter = v
+            anchorElapsedMs = elapsedMs
+            anchorWallMs = now
+            anchorBootId = thisBootId
+            lastEventCounter = v
+            lastEventElapsedMs = elapsedMs
+        } else {
+            Log.e(TAG, "anchorTo failed to persist; keeping in-memory mirror ($v)")
+            anchorCounter = v
+            lastEventCounter = v
+            lastEventElapsedMs = elapsedMs
+        }
+    }
+
     fun runWalCheckpointForExport(): Boolean = database.runWalCheckpointFull()
 
+    // ---- Queries (binder/main thread) -----------------------------------------------------------
+
     /**
-     * Get total step count for a date range
-     * @param startDate Start date in milliseconds (nullable - if null, no start limit)
-     * @param endDate End date in milliseconds (nullable - if null, no end limit)
-     * @return Total steps in the specified range (includes pending buffer when range includes now)
+     * Get total step count for a date range.
+     * @param startDate Start date in local milliseconds (nullable). @param endDate likewise.
+     * @return Total steps in the range, including derived unflushed steps when the range includes now.
      */
     fun getStepCount(startDate: Long? = null, endDate: Long? = null): Int {
         return try {
-            Log.d(TAG, "Filter Local Start TimeStamp: $startDate")
-            Log.d(TAG, "Filter Local End TimeStamp: $endDate")
-            var startUTCTimestamp: Long? = null
-            if (startDate != null) {
-                startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startDate)
-            }
-            var endUTCTimestamp: Long? = null
-            if (endDate != null) {
-                endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endDate)
-            }
-            Log.d(TAG, "Filter UTC Start TimeStamp: $startUTCTimestamp")
-            Log.d(TAG, "Filter UTC End TimeStamp: $endUTCTimestamp")
-
-            val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
+            val startUtc = startDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
+            val endUtc = endDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
+            val dbSteps = database.getStepCount(startUtc, endUtc)
             val nowUtc = TimeStampUtils.getCurrentUtcTimestamp()
-            val rangeIncludesNow = (startUTCTimestamp == null || startUTCTimestamp <= nowUtc) &&
-                (endUTCTimestamp == null || endUTCTimestamp >= nowUtc)
-            val total = dbSteps + if (rangeIncludesNow) pendingSteps.get() else 0
-            Log.d(TAG, "Step count query - DB: $dbSteps, pending: ${pendingSteps.get()}, total: $total")
+            val rangeIncludesNow = (startUtc == null || startUtc <= nowUtc) &&
+                (endUtc == null || endUtc >= nowUtc)
+            val total = dbSteps + if (rangeIncludesNow) unflushed().toInt() else 0
+            Log.d(TAG, "Step count query - DB: $dbSteps, unflushed: ${unflushed()}, total: $total")
             total
         } catch (e: Exception) {
             Log.e(TAG, "Error getting step count: ${e.message}")
@@ -487,69 +518,34 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     }
 
     /**
-     * Get today's step count from database plus any steps not yet flushed (pending buffer).
-     * Read-only; does not flush the buffer.
-     *
-     * @return Total steps for the current day (00:00 - 23:59 local) including pending
+     * Get today's step count (00:00 - 23:59 local) from the DB plus derived unflushed steps.
      */
     fun getTodaysCount(): Int {
         return try {
-            val startLocalTimestamp = TimeStampUtils.getTodaysTimestamp(true)
-            val endLocalTimestamp = TimeStampUtils.getTodaysTimestamp(false)
-
-            Log.d(TAG, "Todays Local Start TimeStamp: $startLocalTimestamp")
-            Log.d(TAG, "Todays Local End TimeStamp: $endLocalTimestamp")
-
-            val startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startLocalTimestamp)
-            val endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endLocalTimestamp)
-
-            Log.d(TAG, "Todays UTC Start TimeStamp: $startUTCTimestamp")
-            Log.d(TAG, "Todays UTC End TimeStamp: $endUTCTimestamp")
-
-            val dbSteps = database.getStepCount(startUTCTimestamp, endUTCTimestamp)
-            val pending = pendingSteps.get()
-            val total = dbSteps + pending
-            Log.d(TAG, "Today's step count - DB: $dbSteps, pending: $pending, total: $total")
+            val startLocal = TimeStampUtils.getTodaysTimestamp(true)
+            val endLocal = TimeStampUtils.getTodaysTimestamp(false)
+            val startUtc = TimeStampUtils.convertLocalTimestampToUtc(startLocal)
+            val endUtc = TimeStampUtils.convertLocalTimestampToUtc(endLocal)
+            val dbSteps = database.getStepCount(startUtc, endUtc)
+            val total = dbSteps + unflushed().toInt()
+            Log.d(TAG, "Today's step count - DB: $dbSteps, unflushed: ${unflushed()}, total: $total")
             total
         } catch (e: Exception) {
             Log.e(TAG, "Error getting today's step count: ${e.message}")
-            0 // Return 0 if DB query fails
+            0
         }
     }
 
     /**
-     * Get timeline data - list of step entries with timestamps
-     * @param startDate Start date in milliseconds (nullable - if null, no start limit)
-     * @param endDate End date in milliseconds (nullable - if null, no end limit)
-     * @param timeZone The timezone type for returned timestamps. Default is LOCAL.
-     * @return List of maps containing step_count and timestamp
+     * Get timeline data (list of step entries with timestamps).
      */
     fun getTimeline(
         startDate: Long? = null, endDate: Long? = null, timeZone: TimeZoneType = TimeZoneType.LOCAL
     ): List<Map<String, Any>> {
         return try {
-            Log.d(TAG, "Timeline Filter Local Start TimeStamp: $startDate")
-            Log.d(TAG, "Timeline Filter Local End TimeStamp: $endDate")
-            Log.d(TAG, "Timeline Return TimeZone Type: $timeZone")
-            
-            // Convert input timestamps to UTC for database query (input timestamps are always treated as local time)
-            var startUTCTimestamp: Long? = null
-            if (startDate != null) {
-                startUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(startDate)
-            }
-            
-            var endUTCTimestamp: Long? = null
-            if (endDate != null) {
-                endUTCTimestamp = TimeStampUtils.convertLocalTimestampToUtc(endDate)
-            }
-
-            Log.d(TAG, "Timeline Filter UTC Start TimeStamp: $startUTCTimestamp")
-            Log.d(TAG, "Timeline Filter UTC End TimeStamp: $endUTCTimestamp")
-
-            // Get timeline data from database (stored in UTC)
-            val dbTimelineData = database.getTimelineData(startUTCTimestamp, endUTCTimestamp)
-
-            // Convert timestamps in response based on requested format
+            val startUtc = startDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
+            val endUtc = endDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
+            val dbTimelineData = database.getTimelineData(startUtc, endUtc)
             val responseData = dbTimelineData.map { entry ->
                 val utcTimestamp = entry["timestamp"] as Long
                 val stepCount = entry["step_count"] as Int
@@ -557,16 +553,14 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
                 val responseTimestamp = if (timeZone.isLocal) {
                     TimeStampUtils.convertUtcTimestampToLocal(utcTimestamp)
                 } else {
-                    utcTimestamp // Keep as UTC
+                    utcTimestamp
                 }
-
                 val result = mutableMapOf<String, Any>(
                     "step_count" to stepCount, "timestamp" to responseTimestamp
                 )
                 if (uuid != null) result["uuid"] = uuid
                 result
             }
-
             Log.d(TAG, "Timeline query - Total entries: ${responseData.size}")
             responseData
         } catch (e: Exception) {
@@ -576,22 +570,15 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     }
 
     /**
-     * Get all timeline entries recorded strictly after [lastSyncTimestamp] (UTC ms).
-     * If [lastSyncTimestamp] is null, the entire timeline is returned.
-     *
-     * @param lastSyncTimestamp Last-synced UTC timestamp in milliseconds, or null for all data
-     * @return List of timeline maps ordered by timestamp ASC, with timestamps in UTC
+     * Get all timeline entries recorded strictly after [lastSyncTimestamp] (UTC ms), or all if null.
      */
     fun getTimelineAfter(lastSyncTimestamp: Long?): List<Map<String, Any>> {
         return try {
-            Log.d(TAG, "getTimelineAfter - lastSyncTimestamp (UTC): $lastSyncTimestamp")
-
             val dbData = if (lastSyncTimestamp != null) {
                 database.getTimelineDataAfter(lastSyncTimestamp)
             } else {
-                database.getTimelineData() // no filter: return everything
+                database.getTimelineData()
             }
-
             val responseData = dbData.map { entry ->
                 val mutableEntry = mutableMapOf<String, Any>(
                     "step_count" to (entry["step_count"] as Int),
@@ -600,7 +587,6 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
                 (entry["uuid"] as? String)?.let { mutableEntry["uuid"] = it }
                 mutableEntry
             }
-
             Log.d(TAG, "getTimelineAfter - returned ${responseData.size} entries")
             responseData
         } catch (e: Exception) {
@@ -610,20 +596,23 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     }
 
     /**
-     * Clean up resources. Guarantees the periodic flush is fully stopped and
-     * all buffered steps are persisted before the database is closed.
+     * Clean up on service stop/destroy. Stops the periodic flush, does ONE bounded best-effort final
+     * flush (so a clean stop persists the last steps), then cancels the scope so this dying manager
+     * can never race a freshly-started one on the shared DB singleton.
      *
-     * Uses runBlocking so cleanup is sequential even on OEM kill paths where
-     * onDestroy() has no coroutine scope available.
-     *
-     * Order: cancelAndJoin (stop periodic flush) → flushPendingSteps (final flush) → close DB
-     * This ensures no flush is ever in-flight when the DB is closed.
+     * The flush is bounded by FINAL_FLUSH_TIMEOUT_MS to avoid an ANR on a slow disk (EC-39); timing
+     * out loses nothing durable because unflushed steps re-derive from the hardware counter on the
+     * next start (EC-12). The DB singleton is intentionally never closed (EC-40).
      */
     fun cleanup() {
-        runBlocking {
-            flushJob?.cancelAndJoin()  // wait for any in-flight periodic flush to finish
-            flushPendingSteps()         // final drain of the buffer
+        flushJob?.cancel()
+        try {
+            runBlocking(dbDispatcher) {
+                withTimeoutOrNull(FINAL_FLUSH_TIMEOUT_MS) { flushLocked() }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "final flush during cleanup failed: ${e.message}")
         }
-        database.close()               // safe: no coroutine is touching the DB anymore
+        coroutineScope.cancel()
     }
 }

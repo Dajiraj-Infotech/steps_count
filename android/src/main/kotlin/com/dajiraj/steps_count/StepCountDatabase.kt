@@ -8,26 +8,59 @@ import android.util.Log
 import java.util.UUID
 
 /**
+ * Durable anchor recovered from the DB on start (Phase 2). The hardware cumulative counter is the
+ * write-ahead log within a boot session; this row is the single durable cursor into it.
+ *
+ * @param anchorCounter Last cumulative sensor value durably written to `steps` (steps are credited
+ *   up to here). NaN means "no anchor yet" (fresh install / voided baseline).
+ * @param anchorElapsedMs elapsedRealtime of the event that set the anchor (for the rate-gate dt).
+ * @param anchorWallMs Wall-clock time the anchor was set (forensics; interval start in Phase 3).
+ * @param bootId BOOT_COUNT + ANDROID_ID fingerprint the anchor was recorded under.
+ * @param lastRowEndMs Timestamp of the most recent step row (monotone watermark; used from Phase 3).
+ */
+data class AnchorState(
+    val anchorCounter: Double,
+    val anchorElapsedMs: Long,
+    val anchorWallMs: Long,
+    val bootId: String,
+    val lastRowEndMs: Long
+)
+
+/**
  * SQLite database helper for storing step count data.
  *
  * Schema history:
- *  v1 — id INTEGER PRIMARY KEY AUTOINCREMENT, step_count INTEGER, timestamp INTEGER
- *  v2 — uuid TEXT PRIMARY KEY, step_count INTEGER, timestamp INTEGER
- *       (aligned with Google Health Connect and Apple HealthKit UUID identifiers)
+ *  v1: id INTEGER PRIMARY KEY AUTOINCREMENT, step_count INTEGER, timestamp INTEGER
+ *  v2: uuid TEXT PRIMARY KEY, step_count INTEGER, timestamp INTEGER
+ *      (aligned with Google Health Connect and Apple HealthKit UUID identifiers)
+ *  v3: adds tracker_state (single-row durable anchor) so steps and the anchor advance in one
+ *      transaction (exactly-once accounting). WAL enabled.
+ *
+ * Use [getInstance] to obtain the process-wide singleton; it is never closed, which removes the
+ * close/reopen/straggler-flush race entirely (EC-40).
  */
 class StepCountDatabase(context: Context) :
-    SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
+    SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION) {
 
     companion object {
         private const val TAG = "StepCountDatabase"
-        private const val DATABASE_NAME = "step_count.db"
-        private const val DATABASE_VERSION = 2
+        const val DATABASE_NAME = "step_count.db"
+        private const val DATABASE_VERSION = 3
 
         // Table and column names
         private const val TABLE_STEPS = "steps"
         private const val COLUMN_UUID = "uuid"
         private const val COLUMN_STEP_COUNT = "step_count"
         private const val COLUMN_TIMESTAMP = "timestamp"
+
+        // Tracker-state table (single row, id = 1): the durable anchor.
+        private const val TABLE_TRACKER = "tracker_state"
+        private const val COL_ID = "id"
+        private const val COL_ANCHOR_COUNTER = "anchor_counter"
+        private const val COL_ANCHOR_ELAPSED = "anchor_elapsed_ms"
+        private const val COL_ANCHOR_WALL = "anchor_wall_ms"
+        private const val COL_BOOT_ID = "boot_id"
+        private const val COL_LAST_ROW_END = "last_row_end_ms"
 
         // SQL statements
         private const val CREATE_TABLE_STEPS = """
@@ -41,30 +74,81 @@ class StepCountDatabase(context: Context) :
         private const val CREATE_INDEX_TIMESTAMP = """
             CREATE INDEX idx_timestamp ON $TABLE_STEPS($COLUMN_TIMESTAMP)
         """
+
+        private const val CREATE_TABLE_TRACKER = """
+            CREATE TABLE $TABLE_TRACKER (
+                $COL_ID INTEGER PRIMARY KEY CHECK ($COL_ID = 1),
+                $COL_ANCHOR_COUNTER REAL,
+                $COL_ANCHOR_ELAPSED INTEGER NOT NULL DEFAULT 0,
+                $COL_ANCHOR_WALL INTEGER NOT NULL DEFAULT 0,
+                $COL_BOOT_ID TEXT NOT NULL DEFAULT '',
+                $COL_LAST_ROW_END INTEGER NOT NULL DEFAULT 0
+            )
+        """
+
+        @Volatile
+        private var instance: StepCountDatabase? = null
+
+        /**
+         * Process-wide singleton. Pass a device-protected-storage context so the DB is readable
+         * before first unlock and is never included in Auto Backup (EC-2/EC-29). Never closed.
+         */
+        fun getInstance(context: Context): StepCountDatabase =
+            instance ?: synchronized(this) {
+                instance ?: StepCountDatabase(context.applicationContext).also { instance = it }
+            }
+    }
+
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        // WAL: a lost tail rolls back rows AND the anchor together (one transaction), so recovery is
+        // always consistent (never a duplicate). synchronous=NORMAL is the standard WAL durability.
+        db.enableWriteAheadLogging()
+        db.execSQL("PRAGMA synchronous=NORMAL")
     }
 
     override fun onCreate(db: SQLiteDatabase) {
-        try {
-            db.execSQL(CREATE_TABLE_STEPS)
-            db.execSQL(CREATE_INDEX_TIMESTAMP)
-            Log.d(TAG, "Database created successfully (v$DATABASE_VERSION)")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error creating database: ${e.message}")
-        }
+        // No catch: a throw rolls back the transaction SQLiteOpenHelper wraps onCreate in, so the
+        // version is NOT committed and creation retries on next open, rather than silently leaving a
+        // versioned-but-tableless DB that fails every insert forever (EC-22).
+        db.execSQL(CREATE_TABLE_STEPS)
+        db.execSQL(CREATE_INDEX_TIMESTAMP)
+        db.execSQL(CREATE_TABLE_TRACKER)
+        seedEmptyTracker(db)
+        Log.d(TAG, "Database created successfully (v$DATABASE_VERSION)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        // No catch / no DROP fallback: a failed migration rolls back and retries next open, never
+        // wipes real history (EC-22). onDowngrade is a data-preserving no-op (EC-60).
         Log.d(TAG, "Upgrading database from v$oldVersion to v$newVersion")
-        try {
-            if (oldVersion < 2) {
-                migrateV1ToV2(db)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error upgrading database: ${e.message}")
-            // Last-resort fallback: recreate from scratch
-            db.execSQL("DROP TABLE IF EXISTS $TABLE_STEPS")
-            onCreate(db)
+        if (oldVersion < 2) migrateV1ToV2(db)
+        if (oldVersion < 3) migrateV2ToV3(db)
+    }
+
+    override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        // Preserve data on an APK rollback instead of throwing "Can't downgrade" on every open (EC-60).
+        Log.w(TAG, "Downgrade $oldVersion -> $newVersion ignored; data preserved")
+    }
+
+    /** v2 -> v3: add the single-row tracker_state anchor table. Steps table is unchanged. */
+    private fun migrateV2ToV3(db: SQLiteDatabase) {
+        db.execSQL(CREATE_TABLE_TRACKER)
+        seedEmptyTracker(db)
+        Log.d(TAG, "Migration v2->v3 complete: tracker_state added")
+    }
+
+    private fun seedEmptyTracker(db: SQLiteDatabase) {
+        // anchor_counter NULL = "no anchor yet"; the first sensor event anchors with zero credit.
+        val values = ContentValues().apply {
+            put(COL_ID, 1)
+            putNull(COL_ANCHOR_COUNTER)
+            put(COL_ANCHOR_ELAPSED, 0L)
+            put(COL_ANCHOR_WALL, 0L)
+            put(COL_BOOT_ID, "")
+            put(COL_LAST_ROW_END, 0L)
         }
+        db.insertWithOnConflict(TABLE_TRACKER, null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
     /**
@@ -148,6 +232,96 @@ class StepCountDatabase(context: Context) :
         }
     }
 
+    /** Read the durable anchor, or null if the tracker row is missing. */
+    fun readTrackerState(): AnchorState? {
+        return try {
+            readableDatabase.query(
+                TABLE_TRACKER, null, "$COL_ID = 1", null, null, null, null
+            ).use { c ->
+                if (!c.moveToFirst()) return null
+                val counterIdx = c.getColumnIndexOrThrow(COL_ANCHOR_COUNTER)
+                AnchorState(
+                    anchorCounter = if (c.isNull(counterIdx)) Double.NaN else c.getDouble(counterIdx),
+                    anchorElapsedMs = c.getLong(c.getColumnIndexOrThrow(COL_ANCHOR_ELAPSED)),
+                    anchorWallMs = c.getLong(c.getColumnIndexOrThrow(COL_ANCHOR_WALL)),
+                    bootId = c.getString(c.getColumnIndexOrThrow(COL_BOOT_ID)) ?: "",
+                    lastRowEndMs = c.getLong(c.getColumnIndexOrThrow(COL_LAST_ROW_END))
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "readTrackerState failed: ${e.message}")
+            null
+        }
+    }
+
+    /** Update the anchor with NO step rows (re-anchor with zero credit). */
+    fun setAnchor(anchor: AnchorState): Boolean {
+        return try {
+            val db = writableDatabase
+            db.beginTransactionNonExclusive()
+            try {
+                upsertTracker(db, anchor)
+                db.setTransactionSuccessful()
+                true
+            } finally {
+                db.endTransaction()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "setAnchor failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Insert [chunks] step rows (each stamped [timestamp]) AND advance the anchor to [anchor] in ONE
+     * transaction. Either all rows plus the anchor commit, or nothing does. This is the exactly-once
+     * guarantee: the anchor never advances past steps that were not durably written, and never lags
+     * behind steps that were (EC-4/EC-5/EC-6/EC-12/EC-14). On failure the caller keeps the derived
+     * credit (lastEventCounter - anchor) and retries on the next flush.
+     *
+     * @return true on commit, false on any failure (rolled back).
+     */
+    fun commitFlush(chunks: List<Int>, timestamp: Long, anchor: AnchorState): Boolean {
+        if (chunks.all { it <= 0 }) return setAnchor(anchor)
+        return try {
+            val db = writableDatabase
+            db.beginTransactionNonExclusive()
+            try {
+                for (chunk in chunks) {
+                    if (chunk <= 0) continue
+                    val values = ContentValues().apply {
+                        put(COLUMN_UUID, UUID.randomUUID().toString())
+                        put(COLUMN_STEP_COUNT, chunk)
+                        put(COLUMN_TIMESTAMP, timestamp)
+                    }
+                    if (db.insert(TABLE_STEPS, null, values) == -1L) {
+                        throw IllegalStateException("step insert returned -1")
+                    }
+                }
+                upsertTracker(db, anchor)
+                db.setTransactionSuccessful()
+                true
+            } finally {
+                db.endTransaction()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "commitFlush failed (rolled back): ${e.message}")
+            false
+        }
+    }
+
+    private fun upsertTracker(db: SQLiteDatabase, a: AnchorState) {
+        val values = ContentValues().apply {
+            put(COL_ID, 1)
+            if (a.anchorCounter.isNaN()) putNull(COL_ANCHOR_COUNTER) else put(COL_ANCHOR_COUNTER, a.anchorCounter)
+            put(COL_ANCHOR_ELAPSED, a.anchorElapsedMs)
+            put(COL_ANCHOR_WALL, a.anchorWallMs)
+            put(COL_BOOT_ID, a.bootId)
+            put(COL_LAST_ROW_END, a.lastRowEndMs)
+        }
+        db.insertWithOnConflict(TABLE_TRACKER, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
     /**
      * Run a full WAL checkpoint so all WAL pages are merged into the main DB file.
      * Call before copying the database file for export. Uses this helper's connection.
@@ -203,7 +377,7 @@ class StepCountDatabase(context: Context) :
     }
 
     /**
-     * Get timeline data — list of step entries with uuid, step_count, and timestamp.
+     * Get timeline data: list of step entries with uuid, step_count, and timestamp.
      *
      * @param startDate Start date in milliseconds (nullable)
      * @param endDate End date in milliseconds (nullable)
@@ -252,7 +426,7 @@ class StepCountDatabase(context: Context) :
      * Get timeline data after a specific timestamp.
      * Queries the indexed `timestamp` column directly with `WHERE timestamp > afterTimestamp`.
      *
-     * @param afterTimestamp UTC timestamp in milliseconds — only entries strictly after this are returned
+     * @param afterTimestamp UTC timestamp in milliseconds; only entries strictly after this are returned
      * @return List of maps containing uuid, step_count, and timestamp
      */
     fun getTimelineDataAfter(afterTimestamp: Long): List<Map<String, Any>> {
