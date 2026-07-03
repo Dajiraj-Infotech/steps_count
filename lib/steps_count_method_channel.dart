@@ -6,6 +6,7 @@ import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
 import 'models/health_data_type.dart';
 import 'models/step_source_info.dart';
+import 'models/step_tracking_status.dart';
 
 /// An implementation of [StepsCountPlatform] that uses method channels.
 class MethodChannelStepsCount extends StepsCountPlatform {
@@ -236,6 +237,16 @@ class MethodChannelStepsCount extends StepsCountPlatform {
       'exportStepsDatabase',
     );
     return result;
+  }
+
+  @override
+  Future<StepTrackingStatus> getTrackingStatus() async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+      'getTrackingStatus',
+    );
+    return StepTrackingStatus.fromMap(
+      result == null ? const {} : Map<String, dynamic>.from(result),
+    );
   }
 
   @override

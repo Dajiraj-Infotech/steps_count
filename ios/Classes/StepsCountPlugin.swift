@@ -47,6 +47,18 @@ public class StepsCountPlugin: NSObject, FlutterPlugin {
         case "exportStepsDatabase":
             result(nil)
 
+        case "getTrackingStatus":
+            // iOS has no background service; report HealthKit availability and step read/write auth.
+            result([
+                "serviceRunning": false,
+                "trackingEnabled": false,
+                "sensorAvailable": HealthKitManager.isHealthKitAvailable(),
+                "permissionGranted": healthKitManager.checkSinglePermissionStatus(for: "stepCount"),
+                "notificationsGranted": false,
+                "lastEventAgeMs": -1,
+                "lastProgressAgeMs": -1
+            ])
+
         case "startStepObserver":
             HealthKitStepObserver.shared.startObserving(callback: { [weak self] in
                 self?.methodChannel?.invokeMethod("onSensorChanged", arguments: nil)

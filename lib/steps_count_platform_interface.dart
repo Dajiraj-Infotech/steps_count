@@ -5,6 +5,7 @@ import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
 import 'models/health_data_type.dart';
 import 'models/step_source_info.dart';
+import 'models/step_tracking_status.dart';
 
 abstract class StepsCountPlatform extends PlatformInterface {
   /// Constructs a StepsCountPlatform.
@@ -144,5 +145,12 @@ abstract class StepsCountPlatform extends PlatformInterface {
   /// On iOS, this returns null as HealthKit data is not stored in a local SQLite DB.
   Future<String?> exportStepsDatabase() {
     throw UnimplementedError('exportStepsDatabase() has not been implemented.');
+  }
+
+  /// Returns a health/observability snapshot of step tracking (service state,
+  /// sensor/permission availability, and staleness). Primarily meaningful on
+  /// Android; see [StepTrackingStatus].
+  Future<StepTrackingStatus> getTrackingStatus() {
+    throw UnimplementedError('getTrackingStatus() has not been implemented.');
   }
 }

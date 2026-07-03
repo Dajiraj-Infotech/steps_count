@@ -214,6 +214,59 @@ class StepCountManager(
             }
             return chunks
         }
+
+        // ---- Service-less reads (EC-30): query the DB directly when no service/manager is running ----
+
+        private fun dbFor(context: Context): StepCountDatabase =
+            StepCountDatabase.getInstance(context.applicationContext.createDeviceProtectedStorageContext())
+
+        /** Today's count straight from the DB (no unflushed buffer, since nothing is running). */
+        fun readTodaysCount(context: Context): Int {
+            val startUtc = TimeStampUtils.convertLocalTimestampToUtc(TimeStampUtils.getTodaysTimestamp(true))
+            val endUtc = TimeStampUtils.convertLocalTimestampToUtc(TimeStampUtils.getTodaysTimestamp(false))
+            return dbFor(context).getStepCount(startUtc, endUtc)
+        }
+
+        fun readStepCount(context: Context, startDate: Long?, endDate: Long?): Int {
+            val startUtc = startDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
+            val endUtc = endDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
+            return dbFor(context).getStepCount(startUtc, endUtc)
+        }
+
+        fun readTimeline(
+            context: Context, startDate: Long?, endDate: Long?, timeZone: TimeZoneType
+        ): List<Map<String, Any>> {
+            val startUtc = startDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
+            val endUtc = endDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
+            return dbFor(context).getTimelineData(startUtc, endUtc).map { toTimelineResponse(it, timeZone) }
+        }
+
+        fun readTimelineAfter(context: Context, lastSync: Long?): List<Map<String, Any>> {
+            val db = dbFor(context)
+            val rows = if (lastSync != null) db.getTimelineDataAfter(lastSync) else db.getTimelineData()
+            return rows.map { toTimelineResponse(it, TimeZoneType.UTC) }
+        }
+
+        /**
+         * Shape a DB timeline row into the method-channel response, converting the end/start timestamps
+         * to the requested zone (a no-op today; timestamps are epoch ms, EC-47) and passing through the
+         * additive interval fields.
+         */
+        fun toTimelineResponse(entry: Map<String, Any>, timeZone: TimeZoneType): Map<String, Any> {
+            val end = entry["timestamp"] as Long
+            val start = (entry["start_timestamp"] as? Long) ?: end
+            val displayEnd = if (timeZone.isLocal) TimeStampUtils.convertUtcTimestampToLocal(end) else end
+            val displayStart = if (timeZone.isLocal) TimeStampUtils.convertUtcTimestampToLocal(start) else start
+            val result = mutableMapOf<String, Any>(
+                "step_count" to (entry["step_count"] as Int),
+                "timestamp" to displayEnd,
+                "start_timestamp" to displayStart,
+                "source" to ((entry["source"] as? String) ?: "live"),
+                "flags" to ((entry["flags"] as? Int) ?: 0)
+            )
+            (entry["uuid"] as? String)?.let { result["uuid"] = it }
+            return result
+        }
     }
 
     // Device-protected storage: readable before first unlock (direct boot, EC-29) and excluded from
@@ -658,6 +711,15 @@ class StepCountManager(
 
     fun runWalCheckpointForExport(): Boolean = database.runWalCheckpointFull()
 
+    /** Milliseconds since the last accepted sensor event, or -1 if none yet (for getTrackingStatus). */
+    fun getLastEventAgeMs(): Long =
+        if (lastEventElapsedMs < 0) -1 else SystemClock.elapsedRealtime() - lastEventElapsedMs
+
+    /** Milliseconds since the last forward PROGRESS, or -1 if none. A large value with a healthy
+     *  service can indicate a frozen-but-delivering hub (EC-38). */
+    fun getLastProgressAgeMs(): Long =
+        if (lastProgressElapsed < 0) -1 else SystemClock.elapsedRealtime() - lastProgressElapsed
+
     // ---- Queries (binder/main thread) -----------------------------------------------------------
 
     /**
@@ -710,22 +772,8 @@ class StepCountManager(
         return try {
             val startUtc = startDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
             val endUtc = endDate?.let { TimeStampUtils.convertLocalTimestampToUtc(it) }
-            val dbTimelineData = database.getTimelineData(startUtc, endUtc)
-            val responseData = dbTimelineData.map { entry ->
-                val utcTimestamp = entry["timestamp"] as Long
-                val stepCount = entry["step_count"] as Int
-                val uuid = entry["uuid"] as? String
-                val responseTimestamp = if (timeZone.isLocal) {
-                    TimeStampUtils.convertUtcTimestampToLocal(utcTimestamp)
-                } else {
-                    utcTimestamp
-                }
-                val result = mutableMapOf<String, Any>(
-                    "step_count" to stepCount, "timestamp" to responseTimestamp
-                )
-                if (uuid != null) result["uuid"] = uuid
-                result
-            }
+            val responseData = database.getTimelineData(startUtc, endUtc)
+                .map { toTimelineResponse(it, timeZone) }
             Log.d(TAG, "Timeline query - Total entries: ${responseData.size}")
             responseData
         } catch (e: Exception) {
@@ -744,14 +792,7 @@ class StepCountManager(
             } else {
                 database.getTimelineData()
             }
-            val responseData = dbData.map { entry ->
-                val mutableEntry = mutableMapOf<String, Any>(
-                    "step_count" to (entry["step_count"] as Int),
-                    "timestamp" to (entry["timestamp"] as Long)
-                )
-                (entry["uuid"] as? String)?.let { mutableEntry["uuid"] = it }
-                mutableEntry
-            }
+            val responseData = dbData.map { toTimelineResponse(it, TimeZoneType.UTC) }
             Log.d(TAG, "getTimelineAfter - returned ${responseData.size} entries")
             responseData
         } catch (e: Exception) {

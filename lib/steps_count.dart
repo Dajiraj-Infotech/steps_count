@@ -3,10 +3,12 @@ import 'models/timeline_model.dart';
 import 'models/timezone_type.dart';
 import 'models/health_data_type.dart';
 import 'models/step_source_info.dart';
+import 'models/step_tracking_status.dart';
 export 'models/timeline_model.dart';
 export 'models/timezone_type.dart';
 export 'models/health_data_type.dart';
 export 'models/step_source_info.dart';
+export 'models/step_tracking_status.dart';
 
 /// A Flutter plugin for counting steps and managing background step tracking services.
 ///
@@ -328,5 +330,26 @@ class StepsCount {
       startDate: startDate,
       endDate: endDate,
     );
+  }
+
+  /// Returns a health/observability snapshot of step tracking: whether the
+  /// service is running, whether the sensor and permissions are available, and
+  /// how stale the data is.
+  ///
+  /// This is primarily useful on **Android** to detect and surface degraded
+  /// states (permission revoked, sensor missing, a frozen sensor hub, or the
+  /// foreground notification hidden). On **iOS** most fields default to safe
+  /// values and [StepTrackingStatus.sensorAvailable] reflects HealthKit
+  /// availability.
+  ///
+  /// Example:
+  /// ```dart
+  /// final status = await stepsCount.getTrackingStatus();
+  /// if (status.trackingEnabled && !status.serviceRunning) {
+  ///   // Tracking is on but the service is down: prompt the user to reopen.
+  /// }
+  /// ```
+  Future<StepTrackingStatus> getTrackingStatus() {
+    return StepsCountPlatform.instance.getTrackingStatus();
   }
 }

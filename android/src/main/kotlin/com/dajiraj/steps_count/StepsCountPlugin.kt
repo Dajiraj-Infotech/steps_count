@@ -2,8 +2,13 @@ package com.dajiraj.steps_count
 
 import android.content.Context
 import android.content.Intent
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -11,6 +16,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import java.util.concurrent.Executors
 
 /** StepsCountPlugin */
 class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
@@ -22,6 +28,27 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private lateinit var channel: MethodChannel
     private var context: Context? = null
     private var activity: android.app.Activity? = null
+
+    // Reads run off the platform thread so a large getTimeline/getTimelineAfter cannot ANR the host
+    // app (EC-45); results are posted back on the main thread as the method channel requires.
+    private val ioExecutor = Executors.newSingleThreadExecutor()
+    // Lazy so merely constructing the plugin (e.g. in a JVM unit test) does not touch the main Looper.
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    /** Coerce a Dart numeric argument to Long, tolerating Int-encoded values (EC-44). */
+    private fun MethodCall.longArg(key: String): Long? = (argument(key) as? Number)?.toLong()
+
+    /** Run [compute] on the IO executor and reply on the main thread; map exceptions to result.error. */
+    private fun replyAsync(result: Result, errorCode: String, compute: () -> Any?) {
+        ioExecutor.execute {
+            val outcome = runCatching(compute)
+            mainHandler.post {
+                outcome
+                    .onSuccess { result.success(it) }
+                    .onFailure { result.error(errorCode, it.message, null) }
+            }
+        }
+    }
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "steps_count")
@@ -58,8 +85,26 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "getStepSources" -> result.success(emptyList<Any>()) // iOS HealthKit only
             "exportStepsDatabase" -> exportStepsDatabase(result)
             "startStepObserver" -> result.success(true) // iOS-only; no-op on Android
+            "getTrackingStatus" -> getTrackingStatus(result)
             else -> result.notImplemented()
         }
+    }
+
+    private fun getTrackingStatus(result: Result) {
+        val ctx = context ?: run { result.error("CONTEXT_ERROR", "Context not available", null); return }
+        val manager = BackgroundServiceManager.stepCountManager
+        val sensorManager = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val sensorAvailable = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
+        val status = mapOf(
+            "serviceRunning" to BackgroundServiceManager.isServiceRunning(),
+            "trackingEnabled" to BackgroundServiceManager.isTrackingEnabled(ctx),
+            "sensorAvailable" to sensorAvailable,
+            "permissionGranted" to BackgroundServiceManager.hasActivityRecognitionPermission(ctx),
+            "notificationsGranted" to NotificationManagerCompat.from(ctx).areNotificationsEnabled(),
+            "lastEventAgeMs" to (manager?.getLastEventAgeMs() ?: -1L),
+            "lastProgressAgeMs" to (manager?.getLastProgressAgeMs() ?: -1L)
+        )
+        result.success(status)
     }
 
     private fun startBackgroundService(result: Result) {
@@ -137,60 +182,42 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
 
     private fun getTodaysCount(result: Result) {
-        try {
-            val manager = BackgroundServiceManager.stepCountManager
-            if (manager == null) {
-                result.success(0)
-                return
-            }
-            result.success(manager.getTodaysCount())
-        } catch (e: Exception) {
-            result.error("TODAYS_COUNT_ERROR", "Failed to get today's count: ${e.message}", null)
+        val ctx = context ?: run { result.error("CONTEXT_ERROR", "Context not available", null); return }
+        // Uses the running manager (includes unflushed steps) or falls back to a direct DB read so the
+        // user does not see 0 after the service was killed (EC-30).
+        replyAsync(result, "TODAYS_COUNT_ERROR") {
+            BackgroundServiceManager.stepCountManager?.getTodaysCount()
+                ?: StepCountManager.readTodaysCount(ctx)
         }
     }
 
     private fun getStepCount(call: MethodCall, result: Result) {
-        try {
-            val startDate = call.argument<Long>("startDate")
-            val endDate = call.argument<Long>("endDate")
-            val manager = BackgroundServiceManager.stepCountManager
-            if (manager == null) {
-                result.success(0)
-                return
-            }
-            result.success(manager.getStepCount(startDate, endDate))
-        } catch (e: Exception) {
-            result.error("STEP_COUNT_ERROR", "Failed to get step count: ${e.message}", null)
+        val ctx = context ?: run { result.error("CONTEXT_ERROR", "Context not available", null); return }
+        val startDate = call.longArg("startDate")
+        val endDate = call.longArg("endDate")
+        replyAsync(result, "STEP_COUNT_ERROR") {
+            BackgroundServiceManager.stepCountManager?.getStepCount(startDate, endDate)
+                ?: StepCountManager.readStepCount(ctx, startDate, endDate)
         }
     }
 
     private fun getTimeline(call: MethodCall, result: Result) {
-        try {
-            val startDate = call.argument<Long>("startDate")
-            val endDate = call.argument<Long>("endDate")
-            val timeZone = TimeZoneType.fromString(call.argument<String>("timeZone"))
-            val manager = BackgroundServiceManager.stepCountManager
-            if (manager == null) {
-                result.success(emptyList<Any>())
-                return
-            }
-            result.success(manager.getTimeline(startDate, endDate, timeZone))
-        } catch (e: Exception) {
-            result.error("TIMELINE_ERROR", "Failed to get timeline data: ${e.message}", null)
+        val ctx = context ?: run { result.error("CONTEXT_ERROR", "Context not available", null); return }
+        val startDate = call.longArg("startDate")
+        val endDate = call.longArg("endDate")
+        val timeZone = TimeZoneType.fromString(call.argument<String>("timeZone"))
+        replyAsync(result, "TIMELINE_ERROR") {
+            BackgroundServiceManager.stepCountManager?.getTimeline(startDate, endDate, timeZone)
+                ?: StepCountManager.readTimeline(ctx, startDate, endDate, timeZone)
         }
     }
 
     private fun getTimelineAfter(call: MethodCall, result: Result) {
-        try {
-            val lastSyncTimestamp = call.argument<Long>("lastSyncTimestamp") // null = return all
-            val manager = BackgroundServiceManager.stepCountManager
-            if (manager == null) {
-                result.success(emptyList<Any>())
-                return
-            }
-            result.success(manager.getTimelineAfter(lastSyncTimestamp))
-        } catch (e: Exception) {
-            result.error("TIMELINE_AFTER_ERROR", "Failed to get timeline data after timestamp: ${e.message}", null)
+        val ctx = context ?: run { result.error("CONTEXT_ERROR", "Context not available", null); return }
+        val lastSyncTimestamp = call.longArg("lastSyncTimestamp") // null = return all
+        replyAsync(result, "TIMELINE_AFTER_ERROR") {
+            BackgroundServiceManager.stepCountManager?.getTimelineAfter(lastSyncTimestamp)
+                ?: StepCountManager.readTimelineAfter(ctx, lastSyncTimestamp)
         }
     }
 
@@ -268,5 +295,11 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
+        // Clear the static channel if it still points at THIS engine's channel, so the long-running
+        // service does not keep invoking a dead messenger (EC-57).
+        if (StepCountManager.stepCountChannel === channel) {
+            StepCountManager.stepCountChannel = null
+        }
+        ioExecutor.shutdown()
     }
 }

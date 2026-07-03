@@ -40,14 +40,6 @@ internal class StepsCountPluginTest {
     }
 
     @Test
-    fun getTodaysCount_isZeroWhenServiceNotRunning() {
-        // With no background service started, the static manager is null and the count is 0
-        // (rather than an error), so callers querying before start get a sane default.
-        val result = call("getTodaysCount")
-        Mockito.verify(result).success(0)
-    }
-
-    @Test
     fun isServiceRunning_isFalseByDefault() {
         val result = call("isServiceRunning")
         Mockito.verify(result).success(false)

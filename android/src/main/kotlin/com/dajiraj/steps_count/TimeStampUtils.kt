@@ -7,6 +7,14 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
+/**
+ * Timestamp helpers. IMPORTANT: all timestamps in this plugin are epoch milliseconds, which are
+ * timezone-independent, so [convertLocalTimestampToUtc] and [convertUtcTimestampToLocal] are
+ * intentional IDENTITY functions (same instant in, same value out). They exist only to make call
+ * sites read clearly; do NOT "fix" them to shift by the zone offset, which would desync every stored
+ * row from the query bounds by the offset (EC-47). Timezone is applied only at display time, in the
+ * Dart layer (see TimelineModel.getDateTime).
+ */
 class TimeStampUtils {
     companion object {
         /**
