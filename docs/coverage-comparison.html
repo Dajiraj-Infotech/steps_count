@@ -1,0 +1,1642 @@
+<title>steps_count: before / after edge-case coverage</title>
+<style>
+:root{
+  --ground:#E9EDF2; --paper:#FBFCFD; --paper2:#F3F6F9;
+  --ink:#161B23; --ink-soft:#48525F; --ink-faint:#7C8695; --line:#D5DCE4;
+  --accent:#0E7C86; --accent-deep:#0A5B63; --accent-wash:#E1F0F1;
+  --crit:#B23A2E; --high:#C4761A; --med:#9C7A1E; --low:#5E6B7B;
+  --fixed:#1E7D57; --partial:#B7791F; --limit:#586472;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.55;
+  font-size:16px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:clamp(1.1rem,4vw,2.6rem) clamp(1rem,4vw,2rem) 4rem}
+h1,h2{text-wrap:balance;letter-spacing:-.015em;line-height:1.12;margin:0}
+p{margin:.5rem 0}
+em{font-style:normal;color:var(--accent-deep);font-weight:600}
+
+/* masthead */
+.masthead{border-top:3px solid var(--accent);padding-top:1.1rem;margin-bottom:1.8rem}
+.kicker{font-family:var(--mono);font-size:.74rem;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--accent-deep);margin-bottom:.7rem}
+.masthead h1{font-size:clamp(1.7rem,4.5vw,2.7rem);font-weight:700}
+.lede{max-width:64ch;color:var(--ink-soft);font-size:1.02rem;margin-top:.7rem}
+
+/* board metrics */
+.board{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:1.4rem}
+.metric{background:var(--paper);padding:1rem 1.1rem}
+.m-num{font-family:var(--mono);font-size:1.9rem;font-weight:600;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;line-height:1}
+.m-num.accent{color:var(--fixed)}
+.m-sub{font-size:1rem;color:var(--ink-faint);margin-left:.15rem}
+.m-lab{font-size:.8rem;color:var(--ink-soft);margin-top:.45rem}
+.m-lab .dim{color:var(--ink-faint)}
+@media(max-width:720px){.board{grid-template-columns:repeat(2,1fr)}.metric:last-child{grid-column:1/-1}}
+
+/* coverage bars */
+.coverage{background:var(--paper);border:1px solid var(--line);border-radius:10px;
+  padding:1.1rem 1.2rem;margin-bottom:1.8rem}
+.cov-row{display:flex;align-items:center;gap:.9rem;margin:.4rem 0}
+.cov-lab{font-family:var(--mono);font-size:.78rem;width:3.4rem;color:var(--ink-soft);text-align:right;
+  text-transform:uppercase;letter-spacing:.06em}
+.cov-bar{flex:1;display:flex;height:30px;border-radius:5px;overflow:hidden;background:var(--paper2)}
+.seg{display:flex;align-items:center;height:100%;color:#fff;font-size:.72rem;font-weight:600;
+  padding:0 .55rem;white-space:nowrap;overflow:hidden;min-width:fit-content}
+.seg-bad{background:linear-gradient(90deg,var(--crit),#933127)}
+.seg-fixed{background:var(--fixed)}
+.seg-partial{background:var(--partial)}
+.seg-limit{background:var(--limit)}
+.cov-note{font-size:.86rem;color:var(--ink-soft);margin:.8rem 0 0;max-width:75ch}
+
+/* filters */
+.filters{position:sticky;top:0;z-index:5;background:var(--ground);
+  padding:.7rem 0;margin-bottom:.9rem;border-bottom:1px solid var(--line);
+  display:flex;flex-wrap:wrap;gap:.5rem 1.3rem;align-items:center}
+.fgroup{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem}
+.fl{font-family:var(--mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--ink-faint);margin-right:.15rem}
+.fb{font-family:var(--mono);font-size:.76rem;color:var(--ink-soft);background:var(--paper);
+  border:1px solid var(--line);border-radius:999px;padding:.24rem .66rem;cursor:pointer;
+  transition:background .12s,color .12s,border-color .12s}
+.fb:hover{border-color:var(--accent)}
+.fb.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.fb:focus-visible{outline:2px solid var(--accent-deep);outline-offset:2px}
+.fcount{margin-left:auto;font-family:var(--mono);font-size:.78rem;color:var(--ink-faint)}
+.fcount #shown{color:var(--ink);font-weight:600}
+
+/* case cards */
+.cases{display:flex;flex-direction:column;gap:.5rem}
+.case{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--sev,#ccc);
+  border-radius:9px;overflow:hidden}
+.case[data-sev="critical"]{--sev:var(--crit)}
+.case[data-sev="high"]{--sev:var(--high)}
+.case[data-sev="medium"]{--sev:var(--med)}
+.case[data-sev="low"]{--sev:var(--low)}
+.case[hidden]{display:none}
+summary{list-style:none;cursor:pointer;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .7rem;
+  padding:.72rem .9rem}
+summary::-webkit-details-marker{display:none}
+summary:focus-visible{outline:2px solid var(--accent-deep);outline-offset:-2px}
+.stripe{width:8px;height:8px;border-radius:50%;background:var(--sev);flex:none}
+.ec{font-family:var(--mono);font-size:.8rem;font-weight:600;color:var(--ink);
+  background:var(--paper2);border:1px solid var(--line);border-radius:5px;padding:.1rem .4rem;
+  font-variant-numeric:tabular-nums;flex:none}
+.sym{font-weight:650;font-size:.94rem;flex:none}
+.scenario{flex:1 1 300px;min-width:200px;color:var(--ink-soft);font-size:.86rem}
+.tags{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin-left:auto}
+.chip{font-family:var(--mono);font-size:.68rem;padding:.12rem .42rem;border-radius:4px;
+  border:1px solid var(--line);color:var(--ink-soft);background:var(--paper2);white-space:nowrap}
+.chip.cat{text-transform:uppercase;letter-spacing:.04em}
+.sev-tag{text-transform:capitalize;color:#fff;border:none}
+.sev-tag.sev-critical{background:var(--crit)} .sev-tag.sev-high{background:var(--high)}
+.sev-tag.sev-medium{background:var(--med)} .sev-tag.sev-low{background:var(--low)}
+.pill{font-size:.68rem;font-weight:600;padding:.14rem .5rem;border-radius:999px;white-space:nowrap}
+.pill.st-fixed{background:#E1F1EA;color:var(--fixed);border:1px solid #BFE0D0}
+.pill.st-partial{background:#F7EEDA;color:#8A5D12;border:1px solid #E8D5AC}
+.pill.st-limit{background:#E9ECF1;color:var(--limit);border:1px solid #D2D9E2}
+
+/* expanded body */
+.body{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+  border-top:1px solid var(--line)}
+@media(max-width:640px){.body{grid-template-columns:1fr}}
+.ba{background:var(--paper);padding:.85rem .95rem}
+.ba.before{background:#FCF7F6}
+.ba.after{background:#F4FAF7}
+.ba-h{font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;
+  font-weight:700;margin-bottom:.4rem;display:flex;align-items:center;gap:.5rem}
+.before .ba-h{color:var(--crit)} .after .ba-h{color:var(--fixed)}
+.ba-h .ph{font-weight:600;letter-spacing:.02em;text-transform:none;color:var(--ink-faint);
+  background:var(--paper2);border:1px solid var(--line);border-radius:4px;padding:.02rem .34rem}
+.ba-t{font-size:.85rem;color:var(--ink-soft);margin:0}
+.risk{font-size:.82rem;color:var(--ink-soft);margin:.55rem 0 0;padding-top:.5rem;
+  border-top:1px dashed var(--line)}
+.risk-l{font-family:var(--mono);font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--crit);font-weight:700;margin-right:.3rem}
+
+/* limits + footer */
+.limits{margin-top:2.2rem;background:var(--paper);border:1px solid var(--line);border-radius:10px;
+  padding:1.2rem 1.35rem}
+.limits h2{font-size:1.25rem;margin-bottom:.3rem}
+.limits ul{margin:.7rem 0;padding-left:1.1rem}
+.limits li{font-size:.9rem;color:var(--ink-soft);margin:.5rem 0}
+.limits b{color:var(--ink)}
+.deferred{font-size:.86rem;color:var(--ink-soft);margin-top:.9rem;padding-top:.8rem;
+  border-top:1px solid var(--line)}
+.foot{margin-top:1.6rem;color:var(--ink-faint);font-size:.82rem}
+.legend{display:flex;flex-wrap:wrap;gap:.5rem 1rem;margin-bottom:.7rem}
+.lg{display:flex;align-items:center;gap:.35rem;font-size:.78rem;color:var(--ink-soft)}
+.sw{width:11px;height:11px;border-radius:3px;flex:none}
+.sw.sev-critical{background:var(--crit)} .sw.sev-high{background:var(--high)}
+.sw.sev-medium{background:var(--med)} .sw.sev-low{background:var(--low)}
+.sw.st-fixed{background:var(--fixed)} .sw.st-partial{background:var(--partial)} .sw.st-limit{background:var(--limit)}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<div class="wrap">
+<header class="masthead">
+<div class="kicker">Reliability audit &middot; steps_count plugin &middot; Android engine</div>
+<h1>Before / after: what the rework actually covers</h1>
+<p class="lede">A case-by-case comparison of the original code against the reworked engine across every edge case surfaced in the review. 60 scenarios, ranked by how badly each hurt step-count trust. The old code did not lack handling so much as handle things in ways that <em>caused</em> the phantom spikes; the new engine addresses each mechanism at its root.</p>
+</header>
+
+<section class="board">
+<div class="metric">
+<div class="m-num">60</div>
+<div class="m-lab">edge cases audited</div>
+</div>
+<div class="metric">
+<div class="m-num">8<span class="m-sub">+18</span></div>
+<div class="m-lab">critical <span class="dim">+ high severity</span></div>
+</div>
+<div class="metric">
+<div class="m-num accent">51</div>
+<div class="m-lab">fixed structurally</div>
+</div>
+<div class="metric">
+<div class="m-num">4<span class="m-sub">+5</span></div>
+<div class="m-lab">partial <span class="dim">+ documented limits</span></div>
+</div>
+<div class="metric">
+<div class="m-num">24</div>
+<div class="m-lab">automated tests <span class="dim">(was 0 real)</span></div>
+</div>
+</section>
+
+<section class="coverage">
+<div class="cov-row">
+<div class="cov-lab">Before</div>
+<div class="cov-bar"><span class="seg seg-bad" style="width:100%">60 unhandled or actively harmful</span></div>
+</div>
+<div class="cov-row">
+<div class="cov-lab">After</div>
+<div class="cov-bar">
+<span class="seg seg-fixed" style="width:85.0000%">51 fixed</span>
+<span class="seg seg-partial" style="width:6.6667%" title="Mostly fixed, narrow residual">4</span>
+<span class="seg seg-limit" style="width:8.3333%" title="Physical/framework limit">5 limits</span>
+</div>
+</div>
+<p class="cov-note">The four independent phantom-spike generators (garbage sensor values, backup-restored baselines, prefs-vs-DB durability races, and time-collapsed catch-up) are all in the "fixed" band. The five documented limits are physical or OS ceilings a sensor-only plugin cannot cross (see foot of page).</p>
+</section>
+
+<nav class="filters" aria-label="Filter cases">
+<div class="fgroup"><span class="fl">Severity</span>
+<button class="fb on" data-k="sev" data-v="all">All</button>
+<button class="fb" data-k="sev" data-v="critical">Critical 8</button>
+<button class="fb" data-k="sev" data-v="high">High 18</button>
+<button class="fb" data-k="sev" data-v="medium">Medium 21</button>
+<button class="fb" data-k="sev" data-v="low">Low 13</button>
+</div>
+<div class="fgroup"><span class="fl">Area</span>
+<button class="fb on" data-k="cat" data-v="all">All</button>
+<button class="fb" data-k="cat" data-v="sensor">Sensor 12</button>
+<button class="fb" data-k="cat" data-v="persistence">Persistence 8</button>
+<button class="fb" data-k="cat" data-v="code-bug">Code bug 14</button>
+<button class="fb" data-k="cat" data-v="time">Time 12</button>
+<button class="fb" data-k="cat" data-v="lifecycle">Lifecycle 14</button>
+</div>
+<div class="fgroup"><span class="fl">Status</span>
+<button class="fb on" data-k="st" data-v="all">All</button>
+<button class="fb" data-k="st" data-v="fixed">Fixed 51</button>
+<button class="fb" data-k="st" data-v="partial">Partial 4</button>
+<button class="fb" data-k="st" data-v="limit">Limit 5</button>
+</div>
+<div class="fcount"><span id="shown">60</span> shown</div>
+</nav>
+
+<section class="cases">
+<details class="case" data-sev="critical" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-critical"></span>
+<span class="ec">EC-1</span>
+<span class="sym">Spike</span>
+<span class="scenario">OEM sensor hub emits one garbage event: uint32 0xFFFFFFFF cast to float (4.2949673E9), Float.MAX_VALUE, or +Infinity after a hub crash/firmware glitch&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-critical">critical</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepCountManager.kt:133 computes the saturated delta; :143-150 caps it to MAX_REASONABLE_DELTA=500,000 and ADDS the cap as real steps, and re-baselines lastSensorValue to the garbage value (Infinity is even persisted to prefs via putFloat at :110-114). The next sane event yields a huge negative delta, treated as &#x27;sensor reset&#x27; at :171-178, silently restoring the baseline. Net result: +500,000 phantom steps in pendingSteps, which flushPendingSteps at :209-217 slices into consecutive MAX_STEPS_PER_ROW=50,000 rows, one per 60s flush cycle, each stamped &#x27;now&#x27; at :221-222. Exactly matches the field signature of 40K-50K single entries.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Spike: up to ten consecutive 50,000-step rows (500K phantom total) from a single garbage event. Correct handling for an implausible delta is discard-and-rebaseline, never add-the-cap.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P1</span></div>
+<p class="ba-t">`isFinite &amp;&amp; 0 &lt;= v &lt;= 1e9` gate pre-arithmetic; garbage discarded with anchor AND baseline untouched; implausible deltas quarantine against a frozen anchor; cap-and-add deleted.</p>
+</div>
+</div>
+</details><details class="case" data-sev="critical" data-cat="persistence" data-st="fixed">
+<summary>
+<span class="stripe sev-critical"></span>
+<span class="ec">EC-2</span>
+<span class="sym">Spike</span>
+<span class="scenario">Android Auto Backup or OEM migration tools (Mi Mover, OPPO/Realme Clone Phone, vivo EasyShare) restore steps_count_prefs on reinstall or onto a NEW de&hellip;</span>
+<span class="tags">
+<span class="chip cat">Persistence</span>
+<span class="chip sev-tag sev-critical">critical</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">loadState (StepCountManager.kt:88-98) trusts restored prefs blindly; onSensorChanged skips re-baseline because isInitialized is true (:124-130) and accepts any positive delta up to 500,000 (:143-155); over 500K, the cap is added anyway (EC-1 path); flush slices into 50,000-step rows (:211-217). No restore detection, no boot-session check (no boot-count or elapsedRealtime anchor), no backup exclusion. Additionally the backup pass copies prefs and DB at different instants while the service is live, and can capture the DB main file without its -wal companion, so restored pending_steps disagrees with the restored DB.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Phantom spike of up to 500,000 steps delivered as successive 50,000-step rows stamped &#x27;now&#x27;. Cross-device restore books pure fabrication; same-device reinstall lumps the whole uninstalled period into one moment. Strongest candidate for the unexplained 40-50K field reports.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">DPS storage (never backed up) + manifest backup rules + device_id/install_id/boot regression checks -&gt; anchor voided, first event credits 0.</p>
+</div>
+</div>
+</details><details class="case" data-sev="critical" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-critical"></span>
+<span class="ec">EC-3</span>
+<span class="sym">Spike</span>
+<span class="scenario">Any delta between 50,001 and 500,000 arrives (garbage value below the saturation range, backup-restore baseline mismatch, hub firmware jump). Human ca&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-critical">critical</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepCountManager.kt:45 sets MAX_REASONABLE_DELTA=500,000 and :143-155 accepts anything at or below it whole. The comment at :41-43 justifying &#x27;8h walk+cycle can exceed 100k&#x27; is physically wrong (cycling barely triggers the step counter; 100K steps needs ~7 sustained hours at world-record cadence). No rate-based plausibility check exists, and none is possible today because event.timestamp is ignored so elapsed time since the previous event is unknown.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Spike: 50K-500K phantom deltas are recorded as-is and sliced into multiple 50K rows; the plausibility gate is roughly 1000x too loose.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P1</span></div>
+<p class="ba-t">`plausibleMax` burst+sustained envelope on monotonic per-event dt; implausible = quarantine/discard, never record.</p>
+</div>
+</div>
+</details><details class="case" data-sev="critical" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-critical"></span>
+<span class="ec">EC-4</span>
+<span class="sym">Lost</span>
+<span class="scenario">Any real DB write failure: disk full, database corrupted or deleted by the corruption handler, table missing because onCreate&#x27;s error was swallowed, o&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-critical">critical</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">insertStepCount (StepCountDatabase.kt:128-148) swallows every exception and returns null; flushPendingSteps (StepCountManager.kt:222) ignores the return value entirely. The flush proceeds as if it succeeded: pendingSteps stays zeroed (getAndSet(0) at :206), prefs pending is overwritten (:225), and the notification is refreshed (:230). The restore-on-failure catch at :231-236 is unreachable for every DB failure mode because insertStepCount never throws. onCreate of the DB also swallows failures (StepCountDatabase.kt:46-54), making every later insert fail forever.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Every failed batch (up to 50,000 steps) is silently and permanently lost while the code logs success; with a persistently broken DB the plugin discards 100 percent of steps forever with no error surfaced to Dart.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">Insert failures throw; transaction rolls back rows+anchor together; steps stay recoverable in the counter; reopen backoff; error surfaced. Failure means retry, never consume-without-store.</p>
+</div>
+</div>
+</details><details class="case" data-sev="critical" data-cat="persistence" data-st="fixed">
+<summary>
+<span class="stripe sev-critical"></span>
+<span class="ec">EC-5</span>
+<span class="sym">Spike / double-count</span>
+<span class="scenario">Doze/OEM batching delivers one onSensorChanged with a large delta (e.g. 20,000). The baseline advances and saveBaseline() queues an async apply() (dis&hellip;</span>
+<span class="tags">
+<span class="chip cat">Persistence</span>
+<span class="chip sev-tag sev-critical">critical</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepCountManager.kt:109-115 persists the baseline with async apply(); :222 commits the same steps to SQLite synchronously; nothing couples DB commit durability to prefs durability, so at any abrupt kill SQLite is ahead of the on-disk baseline and loadState (:88-98) trusts the stale value.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Spike / double-count: an exact duplicate of every batch flushed after the last durable prefs snapshot (1K-50K phantom entries matching the field reports).</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">Prefs removed from counting; baseline (anchor) advances only atomically with the rows it credits.</p>
+</div>
+</div>
+</details><details class="case" data-sev="critical" data-cat="persistence" data-st="fixed">
+<summary>
+<span class="stripe sev-critical"></span>
+<span class="ec">EC-6</span>
+<span class="sym">Spike</span>
+<span class="scenario">A large accepted delta (e.g. 100K-300K from backup restore, missed reboot, or glitch under the 500K cap) is drained 50,000 per flush via the per-row c&hellip;</span>
+<span class="tags">
+<span class="chip cat">Persistence</span>
+<span class="chip sev-tag sev-critical">critical</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepCountManager.kt:211-217 defers the remainder back into pendingSteps in memory; :225 persists pending only after the insert and only with apply(), so the on-disk value overstates by exactly one 50,000 chunk for the whole drain window. loadState (:92) restores the stale value; the deferral mechanism keeps large values parked across multiple flush cycles, widening the window.</p>
+<p class="risk"><span class="risk-l">Symptom</span> User-visible phantom row of up to exactly 50,000 steps, i.e. the max-size single-entry spikes users report; a 100K batch becomes 150K. Compounds precisely when phantom/backlog deltas already occurred.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">No prefs pending, no 50k deferral loop; large catch-ups are single midnight-split interval rows; nothing stale to restore.</p>
+</div>
+</div>
+</details><details class="case" data-sev="critical" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-critical"></span>
+<span class="ec">EC-7</span>
+<span class="sym">Spike</span>
+<span class="scenario">OEM kills the service (autostart blocked) but the phone stays powered on for hours/days/weeks. TYPE_STEP_COUNTER hardware keeps counting. User opens t&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-critical">critical</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Delta computed against the persisted baseline at StepCountManager.kt:133, buffered, then flushed with wall-clock time AT FLUSH via TimeStampUtils.getCurrentUtcTimestamp() at :221-222. Nothing back-dates or spreads the catch-up; event.timestamp is never read. Deltas over 50K are split by the MAX_STEPS_PER_ROW deferral (:211-217) into consecutive 50K rows minutes apart, all on the restart day.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Spike: the exact reported field symptom. Days of steps compressed into one (or a staircase of) huge entries on the restart day; every other downtime day reads 0. Daily totals wrong on N+1 days at once. On these OEMs service death is routine, so users see this repeatedly.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Same-boot downtime delta booked as `source=&#x27;gap&#x27;` over `[anchor wall, now]`, gated, midnight-split; never stamped &quot;now&quot;.</p>
+</div>
+</div>
+</details><details class="case" data-sev="critical" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-critical"></span>
+<span class="ec">EC-8</span>
+<span class="sym">Spike + misattribution</span>
+<span class="scenario">User walks with screen off; SoC suspends (the foreground service holds no wakelock). getDefaultSensor(TYPE_STEP_COUNTER) returned the NON-wake-up vari&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-critical">critical</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">BackgroundServiceManager.kt:98 requests the default (non-wake-up) sensor with SENSOR_DELAY_NORMAL and no maxReportLatency (:136-138). All burst events are merged into pendingSteps and flushed with wall-clock time at flush (StepCountManager.kt:221-222), so an entire afternoon walk lands as one 1K-10K row stamped at unlock time. The fix path exists: getDefaultSensor(TYPE_STEP_COUNTER, true) for the wake-up variant, plus per-event timestamps to backdate.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Spike + misattribution: this is the everyday 1K-2K (up to 10K) single-entry spike generator on exactly the reported devices; steps are real but time-collapsed to one instant, and sessions ending before midnight move to the wrong calendar day.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Wake-up sensor + 5 min maxReportLatency + per-event timestamps reconstruct screen-off walks at true times; pre-midnight walks stay on their day.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-9</span>
+<span class="sym">Misattribution</span>
+<span class="scenario">A batched FIFO delivery after suspend contains MANY events, each carrying event.timestamp (elapsedRealtimeNanos of the last step in that event), which&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">BackgroundServiceManager.kt:225-235 forwards only event.values[0]; the timestamp is dropped before StepCountManager ever sees it, so even when the hub hands over per-interval attribution the plugin discards it and books everything at flush wall-clock (StepCountManager.kt:221). Design constraints for the fix: convert via currentTimeMillis() - elapsedRealtime() + event.timestamp/1e6 recomputed PER EVENT (a cached anchor recreates clock-jump bugs after adjustment or reboot), and clamp results to (last written row timestamp, now] because some Xiaomi/vendor HALs emit bogus event.timestamps (future-dated or epoch-based).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Misattribution: hourly/daily breakdowns are wrong whenever delivery is deferred; discarding the timestamp also blocks every rate-based plausibility check (see EC-3), making this the enabling defect for most spike fixes.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Per-event `wallMs = curTimeMillis - elapsedRealtime + event.ts/1e6`, recomputed each event, clamped to `(watermark, now+2s]`.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="persistence" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-10</span>
+<span class="sym">Server-side double count</span>
+<span class="scenario">Auto Backup double-count with an upstream sync. Backup snapshot taken at time T. User walks after T; rows are inserted and synced to a server via getT&hellip;</span>
+<span class="tags">
+<span class="chip cat">Persistence</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">insertStepCount always generates a new random UUID (StepCountDatabase.kt:123-127), so the re-derived catch-up row cannot be deduplicated against rows already synced before uninstall. Additionally KEY_PENDING_STEPS is restored from backup (StepCountManager.kt:92) and re-flushed even though those steps were flushed on-device after the snapshot.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Server-side double count: steps recorded and synced between backup time and uninstall are counted twice; the restored pending buffer adds a further duplicate row.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">Backup excluded; migration preserves v2 uuids; deterministic uuids from (device, boot, counter range) make any re-derivation dedupe server-side; restore voids the anchor.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-11</span>
+<span class="sym">Spike</span>
+<span class="scenario">Reboot with delayed service restart (OEM autostart denial, Xiaomi/Vivo scheduled power off/on). TYPE_STEP_COUNTER resets to 0 and climbs while the ser&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Reboot detection is solely &#x27;delta &lt; 0&#x27; (StepCountManager.kt:171-178). No boot-session marker is persisted (no boot id, no SystemClock.elapsedRealtime comparison, event.timestamp unused). Case A silently re-baselines and DISCARDS sensorValue, which IS the count of real steps walked since boot: every reboot swallows all steps between boot and the first serviced event (easily thousands for a morning commute). Case B credits only (stepsSinceBoot - oldBaseline), undercounting by the old baseline amount, and books the remainder as one lump at flush wall-clock time (:221). Refinement of the prior review: a missed reboot alone can never OVERCOUNT; phantom positives require backup restore (EC-2) or garbage values (EC-1).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Silent permanent loss of all steps walked between boot and first event (possibly a multi-day gap), plus a misattributed multi-thousand lump at app-open time; erodes trust in the opposite direction from spikes.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P1</span></div>
+<p class="ba-t">BOOT_COUNT session marker; Case A credits `min(v, gate)` as `boot_gap` from boot time; Case B gates by wall gap; no silent discard, no lump-at-now.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="persistence" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-12</span>
+<span class="sym">Loss</span>
+<span class="scenario">Abrupt process death (MIUI swipe-kill, Vivo/OPPO battery optimizer SIGKILL, LMK, crash, permission-revocation kill, app update) at any moment after on&hellip;</span>
+<span class="tags">
+<span class="chip cat">Persistence</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">saveBaseline() advances and persists last_sensor_value immediately on every event, BEFORE the steps reach SQLite (StepCountManager.kt:149-153, apply at :109-115), while KEY_PENDING_STEPS is only persisted after a successful DB flush (:225). On restart loadState (:92) restores the stale pending value from the last flush; everything accumulated since is unrecoverable because the durable baseline has already moved past it and the hardware never re-delivers.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Permanent silent loss of the entire unflushed buffer on every abrupt kill: normally up to ~49 steps / 60s, but up to an entire multi-hour OEM batch (tens of thousands of steps). On phones that kill the app daily this is a steady visible undercount.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">Unflushed steps derived from `counter - anchor`; process death loses only memory, re-derived at next event; loss only at boot-session end, bounded Section 5.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-13</span>
+<span class="sym">Phantom</span>
+<span class="scenario">Concurrent flushes with no mutex: every sensor event with pending &gt;= 50 launches a new flush coroutine on Dispatchers.IO on top of the periodic one. F&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepCountManager.kt:168-170 launches a flush per qualifying event and :189-196 runs the periodic loop with no mutual exclusion; :225 writes a racy pendingSteps.get() snapshot; :206-207 returns early on an empty buffer without ever correcting KEY_PENDING_STEPS, including cleanup&#x27;s final flush, so even a CLEAN service stop preserves the phantom. The next start restores 20,000 and flushes a phantom row.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Durable phantom entry equal to a batch size that survives clean restarts; no abnormal kill needed.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">Single-flight flush under `stateMutex`; no prefs pending to race on.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-14</span>
+<span class="sym">Trust</span>
+<span class="scenario">flushPendingSteps inserts a batch successfully, then onFlushSuccess() -&gt; updateNotification() throws (NotificationManager.notify or packageManager.get&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">onFlushSuccess() is called INSIDE the try block at StepCountManager.kt:230, after the DB insert (:222) and prefs write (:225). The catch at :231-236 assumes the DB write failed and re-adds toInsert to pendingSteps, and additionally re-adds the deferred remainder (:234) which was ALREADY added back at :213 before the try. For a 100,000 pending buffer: 50,000 is in the DB, and the buffer becomes 150,000, later flushed as three more 50,000 rows. This is the live path that turns the supposedly dead double-add code into real double counting.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Steps already persisted get flushed again: up to 50,000 duplicated steps plus a twice-counted remainder per occurrence, appearing as extra 50K rows.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">`onFlushSuccess()` outside the accounting try; commit is the success point; no restore-into-buffer path exists.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-15</span>
+<span class="sym">Zombie foreground service</span>
+<span class="scenario">StepCountManager construction throws once in Service.onCreate: credential-encrypted SharedPreferences accessed pre-unlock (the receiver is directBootA&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">initializeStepManager (BackgroundServiceManager.kt:103-114) catches the exception and leaves the companion stepCountManager null, but onStartCommand proceeds: startService() sets isRunning=true, registers the sensor, and starts the foreground notification showing &#x27;Today&#x27;s Steps: 0&#x27;. onSensorChanged (:225-235) drops every event because manager==null. There is NO re-initialization attempt for the life of the process, and every future start attempt (plugin or receiver, including BootServiceManager.checkAndStartService) no-ops on &#x27;if (isRunning) return&#x27; (:117), so isRunning=true actively blocks all recovery.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Zombie foreground service: notification claims tracking is active while zero steps are recorded for the entire boot session; the stale baseline then turns the eventual real restart into loss or a giant catch-up spike.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">`ensureRunning()` retried per start command/tick; failure -&gt; degraded status, not zombie; DPS removes the pre-unlock CE crash cause.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-16</span>
+<span class="sym">Trust</span>
+<span class="scenario">Stop/start race wedges the service: Dart calls stopBackgroundService then startBackgroundService in quick succession (or the boot receiver retry races&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">BackgroundServiceManager.kt:103-114 creates the manager only from onCreate (:51-58); :116-125 restarts without recreating it; :227-233 silently drops every sensor event on the null-manager check. When onDestroy finally runs, doCleanup() early-returns at the cleanupDone guard (:208), so isRunning is never reset and the listener is never unregistered. isServiceRunning() keeps returning true, so StepsCountPlugin.startBackgroundService short-circuits with success (StepsCountPlugin.kt:73-76).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Notification and API both claim tracking is active while zero steps are recorded, possibly for days, until the process dies; the eventual real restart produces a giant catch-up lump.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Idempotent re-init on every start; `isRunning` derived, reset unconditionally in `onDestroy`.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-17</span>
+<span class="sym">Spike</span>
+<span class="scenario">ACTIVITY_RECOGNITION is auto-reset (Android 11+ unused-app reset, Android 12+ hibernation) or revoked mid-run. On API 29+ registerListener for TYPE_ST&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">registerSensor (BackgroundServiceManager.kt:134-149) only checks the boolean return, which stays true, so nothing is logged or surfaced; the service looks healthy while counting zero. No permission check and no event-silence watchdog exist anywhere. After re-grant plus process restart, the first event&#x27;s delta spans the entire silent gap and is flushed as one row at &#x27;now&#x27;.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Long silent loss window followed by a multi-thousand catch-up spike: user sees weeks of 0 then one absurd entry.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Explicit permission check + status API + silence watchdog; re-grant catch-up = gated, marked `gap` row.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-18</span>
+<span class="sym">Spike</span>
+<span class="scenario">Android 14+ (targetSdk 34): startForeground with FOREGROUND_SERVICE_TYPE_HEALTH throws SecurityException when ACTIVITY_RECOGNITION is not granted (use&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">startForegroundService&#x27;s catch (BackgroundServiceManager.kt:156-171) logs and calls stopSelf(); BootServiceManager retries once 2-3s later and fails identically. Nothing is surfaced to Dart: StepsCountPlugin.startBackgroundService already returned result.success(true) fire-and-forget right after sending the intent (StepsCountPlugin.kt:83-90). Even on API 29-33 where the FGS starts, the sensor delivers nothing without the permission, and neither plugin nor service checks or reports this.</p>
+<p class="risk"><span class="risk-l">Symptom</span> For every user who denied the permission, tracking dies silently on every boot on Android 14/15 (a start-then-SecurityException-stop loop) while the app believes it started; long gaps followed by a catch-up spike on recovery.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">SecurityException caught -&gt; `fgs_denied` diag + resume notification + clean stop, `START_NOT_STICKY`; plugin surfaces `last_start_failure`.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-19</span>
+<span class="sym">Spike</span>
+<span class="scenario">MIUI/HyperOS, ColorOS (OPPO/Realme), FuntouchOS/OriginOS (Vivo) power managers gate sensor event delivery or freeze the app process despite the foregr&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Same collapse-at-now outcome as EC-8 via StepCountManager.kt:221-222, but caused by OEM policy rather than SoC suspend, so a wake-up sensor alone will not fix it. The code never re-registers the listener after the initial registerSensor (BackgroundServiceManager.kt:134-149) and tracks no last-event time, so a torn-down connection is indistinguishable from an idle user.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Spike + misattribution on exactly the reported OEM set; or permanent silent loss when the connection is killed.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">6 h silence watchdog re-registers; eventual burst is per-event-attributed or marked `gap`, never a &quot;now&quot; lump.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-20</span>
+<span class="sym">Crash</span>
+<span class="scenario">startForegroundService is called a second time while the service is already running and startService() early-returns without calling startForeground a&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">BackgroundServiceManager.startService() (BackgroundServiceManager.kt:116-125) begins with &#x27;if (isRunning) return&#x27;, so the second startForegroundService call is never answered with a Service.startForeground() call. Android arms a startForeground timeout per startForegroundService call; the unanswered one raises RemoteServiceException / ForegroundServiceDidNotStartInTimeException and kills the process.</p>
+<p class="risk"><span class="risk-l">Symptom</span> &#x27;App keeps stopping&#x27; crash right after boot or app-open; the process kill also discards in-memory pending steps and can strand un-applied prefs writes: crash plus count corruption.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">`startForeground()` unconditionally in `onCreate` and per `onStartCommand`, answering every `startForegroundService` promise.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="persistence" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-21</span>
+<span class="sym">Trust</span>
+<span class="scenario">A single SQLiteDatabaseCorruptException during any open or query (unclean power loss mid-commit on budget eMMC, torn WAL header). The helper was const&hellip;</span>
+<span class="tags">
+<span class="chip cat">Persistence</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepCountDatabase.kt:18-19 passes no DatabaseErrorHandler to SQLiteOpenHelper; every read/write path catches exceptions and returns 0/empty/null, so the wipe is invisible to the app layer.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Entire step history silently destroyed in one event; lifetime totals reset to zero with no error surfaced.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Custom DatabaseErrorHandler renames (never deletes) the corrupt file; recovery logged and surfaced.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="persistence" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-22</span>
+<span class="sym">Loss</span>
+<span class="scenario">DB migration or creation fails mid-way: disk-full or I/O error during migrateV1ToV2&#x27;s single full-table INSERT...SELECT (no space check), a first-inst&hellip;</span>
+<span class="tags">
+<span class="chip cat">Persistence</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">onUpgrade&#x27;s catch (StepCountDatabase.kt:56-68) executes DROP TABLE IF EXISTS steps + onCreate as &#x27;last resort&#x27;: by then v1 data was renamed to steps_old (:80), so all history is stranded invisibly in steps_old while a fresh empty table is committed as v2; steps_old is never cleaned up or recovered. Worse, onCreate (:46-54) also swallows failures, so a failed CREATE TABLE still commits DATABASE_VERSION=2 with NO steps table at all; onCreate never runs again and every subsequent insert fails silently forever via EC-4.</p>
+<p class="risk"><span class="risk-l">Symptom</span> One transient error at app-update/install time wipes the visible step history or bricks the DB permanently with total silent loss of all future steps: the worst possible trust event.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">No catches in `onCreate`/`onUpgrade` (rollback + retry), free-space precheck, no DROP fallback, `steps_old` salvage.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="lifecycle" data-st="limit">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-23</span>
+<span class="sym">Lost</span>
+<span class="scenario">User force-stops the app (Settings, or an OEM &#x27;deep clean&#x27; implemented as force stop). Process is killed with no onDestroy, and the app enters the sto&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-limit">Mitigated (documented limit)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">START_REDELIVER_INTENT (BackgroundServiceManager.kt:77) is cancelled by force stop, and stopped-state apps receive no manifest broadcasts, so BOOT_COMPLETED / MY_PACKAGE_REPLACED / USER_PRESENT (BootServiceManager.kt:16-30) are all withheld until the user explicitly relaunches the app. Nothing records or detects the outage.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Unbounded tracking gap (even across reboots) that ends only on manual app launch, followed by one misattributed catch-up lump; buffered steps at kill time are also lost (EC-12).</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Framework limit documented; onTaskRemoved job + persisted JobScheduler watchdog + resume notification + gap recovery bound and mark the outage.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-24</span>
+<span class="sym">Loss + misattribution</span>
+<span class="scenario">Wall clock steps BACKWARD while counting: user fixes a fast clock, NITZ correction, or carrier push. Budget dual-SIM phones (exactly the affected POCO&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Flush stamps raw System.currentTimeMillis with no monotonicity guard against the last written row (StepCountManager.kt:221; no max-timestamp query exists in StepCountDatabase.kt). getTimelineDataAfter uses strict &#x27;timestamp &gt; ?&#x27; (StepCountDatabase.kt:263-271), so any consumer syncing with a lastSync watermark will NEVER receive the backdated rows. Timeline ORDER BY timestamp ASC interleaves rows out of true chronological order; midnight-crossing corrections make just-walked steps vanish from today&#x27;s display then reappear pre-banked.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Loss + misattribution: a steady trickle of rows silently never synced (backend undercount with no error signal), day-boundary flushes landing on the wrong side of midnight, and out-of-order timelines.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Strictly-increasing watermark: backward clocks compress at `watermark+1` (flagged), never backdate; legacy `&gt; lastSync` cursor provably never starves; monotonic dt for gating; `seq` cursor immune entirely.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-25</span>
+<span class="sym">Loss then spike</span>
+<span class="scenario">Wall clock jumps FORWARD then is corrected: NITZ glitch, or the user manually sets the date days ahead (common for game time-skip cheats on exactly th&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Flushes during the wrong-forward period write rows stamped in the future (StepCountManager.kt:221); nothing detects or clamps timestamps &gt; now on read or write. Future rows match no current-day query (TimeStampUtils.kt:31-32, StepCountDatabase.kt:299-317). After the watermark is poisoned, every row written post-correction has timestamp &lt; the watermark, so getTimelineAfter returns empty until real time passes the phantom timestamp (StepCountManager.kt:377-402, StepCountDatabase.kt:258-271).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Loss then spike: today&#x27;s steps show 0 after correction, then reappear pre-banked when the future date arrives; one transient glitch silently halts step sync for days/weeks and all rows written in that window are skipped forever.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Forward wall jumps clamped to the anchor-projected monotonic time (`expectedWall + 15 min`), NOT to the poisoned wall clock, so a multi-day date-set forward no longer poisons the watermark or day attribution; the new offset is adopted only after it stays stable &gt;= 1 h (transient set self-heals); `now + 2s` absolute backstop retained; migration clamps existing future v2 rows; `seq` cursor unaffected.</p>
+</div>
+</div>
+</details><details class="case" data-sev="high" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-high"></span>
+<span class="ec">EC-26</span>
+<span class="sym">False confidence</span>
+<span class="scenario">The unlock-time recovery path never fires on modern Android. ACTION_USER_UNLOCKED is broadcast with FLAG_RECEIVER_REGISTERED_ONLY (never delivered to &hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-high">high</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">BootServiceManager.kt:22-24 handles both actions and the example manifest registers them (AndroidManifest.xml:59-60), but on API 26+ (virtually all field devices) checkAndStartService() is unreachable dead code. Related manifest trap: the second MY_PACKAGE_REPLACED intent-filter (manifest :65-68) pairs it with a data scheme so it can never match; only the first filter works, and &#x27;cleaning up&#x27; the working duplicate would kill restart-after-update entirely.</p>
+<p class="risk"><span class="risk-l">Symptom</span> False confidence: the intended &#x27;restart on every unlock&#x27; safety net does not exist, so mid-day OEM kills persist until the next boot/update/app launch, feeding the gap-plus-lump pattern on exactly the reported devices.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Dead manifest unlock filters removed; runtime `USER_UNLOCKED` receiver in the direct-boot service; broken data-scheme `MY_PACKAGE_REPLACED` filter deleted, working one kept.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-27</span>
+<span class="sym">Loss + misattribution</span>
+<span class="scenario">Boot before time sync: BOOT_COMPLETED starts the service on a device with a drained battery or weak RTC (common on Xiaomi/POCO); the wall clock reads &hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">BootServiceManager starts the service immediately on boot actions (BootServiceManager.kt:16-24, 44-62); StepCountManager&#x27;s init loads pending and starts the 60s flush loop right away (StepCountManager.kt:80-83), stamping rows with the current, possibly bogus wall clock (:221). No monotonic (elapsedRealtime) anchor and no sanity check rejects timestamps before the last written row.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Loss + misattribution: rows dated 1970/stale never appear in today&#x27;s queries, are permanently skipped by &#x27;timestamp &gt; lastSync&#x27; sync (strictly-greater cursor, StepCountDatabase.kt:266), and pollute whatever ancient day they land on.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Gap starts projected on elapsedRealtime; pre-NITZ stamps clamp to `watermark+1` flagged CLOCK_CLAMPED; nothing lands in 1970.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-28</span>
+<span class="sym">Trust</span>
+<span class="scenario">Boot receiver relies on Handler.postDelayed after onReceive returns. Once onReceive returns, a receiver-only process has no active component; if the i&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">The 3s verification/retry (BootServiceManager.kt:65-73) and the 2s exception retry (:81-85) are posted to the main looper with no goAsync(), no PendingResult, and no wakelock; if the process dies first they never execute. The verification also only reads the in-process static isRunning (BackgroundServiceManager.kt:34), which cannot see anything the process no longer knows.</p>
+<p class="risk"><span class="risk-l">Symptom</span> On exactly the OEM devices that block the first start, the only recovery mechanism silently evaporates; tracking stays down until manual launch, producing gap-plus-lump.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">AlarmManager retry PendingIntent (survives process death) replaces `postDelayed`; cancelled by the service on success.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-29</span>
+<span class="sym">Loss</span>
+<span class="scenario">FBE device boots with a lock screen: the directBootAware receiver gets LOCKED_BOOT_COMPLETED before unlock, but the Service is NOT directBootAware (ex&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">The startForegroundService failure lands in the fragile postDelayed retry (EC-28); USER_UNLOCKED/USER_PRESENT delivery is dead (EC-26), so recovery waits for BOOT_COMPLETED after first unlock or app open. Steps walked between boot and the first serviced event are then consumed by the negative-delta re-baseline (StepCountManager.kt:171-178) and lost (EC-11). The service&#x27;s non-directBootAware status is currently the only accidental guard against EC-15&#x27;s CE-storage crash; making the receiver more aggressive without fixing storage access would trigger it.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Recurring loss every reboot (boot-to-unlock steps) plus extended service downtime feeding one giant misdated catch-up entry.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Service directBootAware + DB/prefs in DPS: pre-unlock counting fully works from `LOCKED_BOOT_COMPLETED`; no CE crash.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-30</span>
+<span class="sym">Loss</span>
+<span class="scenario">All read APIs return 0/empty whenever the service is not running, even though step_count.db sits intact on disk. Trigger: any period between a kill/re&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">getTodaysCount, getStepCount, getTimeline, getTimelineAfter all return 0 or [] when BackgroundServiceManager.stepCountManager is null (StepsCountPlugin.kt:141-145, 156-160, 172-176, 186-190) instead of opening the existing database read-only.</p>
+<p class="risk"><span class="risk-l">Symptom</span> User opens the app after a kill and sees today&#x27;s steps as 0: perceived data loss. Sync layers can persist/upload the zeros, overwriting good server data, then show a jump when the service restarts.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P5</span></div>
+<p class="ba-t">Never-closed singleton DPS DB serves all reads when the service is down; errors surface as errors, not zeros.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="code-bug" data-st="partial">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-31</span>
+<span class="sym">Double-Count</span>
+<span class="scenario">App draws an hourly chart querying getStepCount per hour bucket, queries a narrow range like the last 5 minutes, or snapshots the day total at 23:59 w&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-partial">Mostly fixed (narrow residual)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">getStepCount (StepCountManager.kt:268-274) adds the ENTIRE pending buffer (up to 1,000,000) to any range whose bounds merely straddle &#x27;now&#x27;, regardless of range width, so a 1-second range can return the whole buffer. getTodaysCount (:287-310) always adds the full buffer to today. The same steps are later inserted with a post-midnight flush timestamp (:221), so snapshot consumers count them in day N (live query) and again in day N+1 (DB row). A backward clock change makes a re-queried historical day &#x27;include now&#x27; again and absorb today&#x27;s buffer.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Sub-day queries inflated by unrelated buffered steps, per-hour charts show phantom spikes in the current bucket, and day totals no longer reconcile with the timeline sum (double-count across midnight).</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P5</span></div>
+<p class="ba-t">Live contribution = timestamped segments overlapping the queried window only; narrow ranges get only their share.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-32</span>
+<span class="sym">Misattribution</span>
+<span class="scenario">Deferred or stale pending steps replayed under a new clock: a deferred burst crosses midnight (walk gated in the evening, burst flushes at 00:30; 50K-&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">loadState restores the prefs value into pendingSteps (StepCountManager.kt:92); the 60s periodic flush writes it with a fresh &#x27;now&#x27; stamp (:190-195, :221); the deferral loop (:211-217) drains a large remainder as repeated 50K rows, one per flush tick, each stamped at its own flush time. getTodaysCount buckets strictly by row timestamp (:287-310), so yesterday&#x27;s steps are booked to today.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Misattribution: yesterday ends low and today starts with a phantom pre-dawn block; steps (or glitch counts) accumulated days earlier appear as a staircase of large entries at times the user demonstrably was not walking.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">No persisted pending buffer; rows midnight-split at write; gap rows carry their true interval, never flush time.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-33</span>
+<span class="sym">Misattribution + loss window</span>
+<span class="scenario">Flush cadence vs CPU suspend: device in Doze or deep sleep between maintenance windows while the user walks screen-off. The &#x27;60 second&#x27; periodic flush&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">startPeriodicFlush uses delay(FLUSH_INTERVAL_MS) on Dispatchers.IO (StepCountManager.kt:66, 189-196); there is no AlarmManager/elapsedRealtime-based schedule. Between suspends the timer barely advances, so a flush can occur hours of wall time after accumulation, and the stamp is taken at that late flush (:221).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Misattribution + loss window: stamps drift hours from when steps happened (routinely crossing local midnight), and unflushed steps sit in RAM far longer than 60s, enlarging the loss on process death.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Flush deadline on elapsedRealtime, re-checked at every event delivery; stamps come from event timestamps, so delay drift is correctness-neutral anyway.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-34</span>
+<span class="sym">Spike</span>
+<span class="scenario">Midnight race inside getTodaysCount: the periodic flush or a poll fires within a few ms of local midnight. getTodaysTimestamp(true) runs at 23:59:59.9&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Start and end are computed by two independent LocalDate.now() calls (StepCountManager.kt:289-290 calling TimeStampUtils.kt:25-34), so the window can span 48 hours. The inflated result is pushed into the persistent foreground notification via onFlushSuccess -&gt; updateNotification (BackgroundServiceManager.kt:108, 217-223) and sticks until the next non-empty flush (flush early-returns when pending is 0, StepCountManager.kt:207).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Spike: the notification (and any app poll at that instant) shows yesterday + today combined, roughly doubling the count exactly at midnight, potentially displayed all night.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Day window from one `ZonedDateTime.now` snapshot, half-open.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-35</span>
+<span class="sym">Perceived spike</span>
+<span class="scenario">Stale notification across midnight: user walks 8,000 steps, sleeps at 23:30; no steps overnight means every periodic flush early-returns. User checks &hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">The notification text is only rebuilt on service start and on successful flush (BackgroundServiceManager.kt:108, 116-124, 217-223); flushPendingSteps returns before onFlushSuccess when the buffer is empty (StepCountManager.kt:206-207). There is no midnight-triggered refresh, so the notification still says &#x27;Today&#x27;s Steps: 8,000&#x27; after the day rolled over while the app UI says 0.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Perceived spike: a daily-recurring phantom count in the persistent notification every morning; a highly plausible source of user spike reports.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Notification refreshed on flush and on SCREEN_ON; day window recomputed at display time.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="time" data-st="limit">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-36</span>
+<span class="sym">Misattribution</span>
+<span class="scenario">Timezone change / travel: user flies Mumbai to Tokyo (+3:30) or the carrier pushes a zone change. Rows are absolute epoch millis; &#x27;today&#x27; is recompute&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-limit">Mitigated (documented limit)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">getTodaysTimestamp uses ZoneId.systemDefault() at call time (TimeStampUtils.kt:25-34); stored rows keep their flush-time epoch stamps (StepCountManager.kt:221). After the zone change, yesterday-evening steps fall inside the new &#x27;today&#x27; window (eastward) or this morning&#x27;s steps fall out of it (westward); all historical per-day totals silently recompute under the new zone.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Misattribution: day totals visibly jump or drop mid-day after travel, and history disagrees with any backend that bucketed days under the old zone.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">documented</span></div>
+<p class="ba-t">Epoch-pure rows + proportional overlap re-bucket honestly under a new zone; `tz_offset_min` recorded per row for a future written-zone API; `health_log(&#x27;timezone_changed&#x27;)`. Documented.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="sensor" data-st="limit">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-37</span>
+<span class="sym">Overcount</span>
+<span class="scenario">User rides a motorbike/auto-rickshaw or a bumpy bus; cheap hub step algorithms (frequent complaint on POCO/Realme/entry Vivo) count vibration as steps&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-limit">Mitigated (documented limit)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Indistinguishable from real walking at StepCountManager.kt:133-155: the plugin faithfully records what the hub says. No cadence/rate heuristic exists (and cannot until event.timestamp is used, EC-9). This explains a subset of the 1K-2K complaints that no baseline/reset fix will remove; only a per-elapsed-time rate cap can dampen it.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Recurring 1-2K daily overcounts on affected hardware; sets a ceiling on achievable accuracy for a sensor-only plugin, so it should be documented as expected behavior.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">documented</span></div>
+<p class="ba-t">Hardware floor documented; rate gate clips only &gt;5/s bursts; per-event cadence in health_log enables future heuristics.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="sensor" data-st="limit">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-38</span>
+<span class="sym">Loss</span>
+<span class="scenario">Sensor goes permanently silent mid-session: sensor HAL/hub crash where the framework&#x27;s listener re-attach fails on OEM builds, or the documented MIUI &hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-limit">Mitigated (documented limit)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">No watchdog exists: neither BackgroundServiceManager nor StepCountManager records the time of the last sensor event, so days of silence raise nothing. Frozen-same-value events produce delta 0 and fall through both branches at StepCountManager.kt:135/171 forever. Steps are uncounted until reboot; the reboot then hits the negative-delta re-baseline (:171-178), making the gap permanently unrecoverable.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Loss: multi-day zero counts with a healthy-looking notification; users read it as the app being broken.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Watchdog driven off `lastProgressElapsed` (accepted positive deltas only); zero-delta heartbeats from a frozen-but-delivering hub do NOT re-arm it, so 6 h without real progress trips unregister/re-register and logs `sensor_frozen_suspect` with the stuck value; `getTrackingStatus` exposes `lastProgressAgeMs`. Truly-silent connections covered as before. Steps lost inside a hub-freeze window (or while powered off) remain physically unrecoverable: documented limit, not a fixable gap.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-39</span>
+<span class="sym">Loss</span>
+<span class="scenario">runBlocking cleanup on the main thread during stop/shutdown: stopService() and onDestroy() (BackgroundServiceManager.kt:127-132, 241-247) call StepCou&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">cleanup() (StepCountManager.kt:414-420) uses runBlocking with no dispatcher hop, so flushPendingSteps executes the SQLite insert, WAL activity, and SharedPreferences work ON THE MAIN THREAD, blocking until disk I/O completes under the service ANR watchdog.</p>
+<p class="risk"><span class="risk-l">Symptom</span> ANR (&#x27;executing service&#x27;) on stop/destroy on slow devices; the ANR kill can land between the DB insert (:222) and the prefs write (:225), converting an orderly stop into the EC-6 duplicate or EC-12 loss; also delays device shutdown/reboot.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">-</span></div>
+<p class="ba-t">Cleanup is a bounded 3 s best-effort flush on IO; skipping it is provably safe (recovery re-derives); no main-thread runBlocking.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-40</span>
+<span class="sym">Loss</span>
+<span class="scenario">A sensor event lands just before stopService/onDestroy: onSensorChanged launches flushPendingSteps on the manager&#x27;s IO scope; the main thread runs doC&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">cleanup() joins ONLY flushJob (StepCountManager.kt:416); threshold flush coroutines launched at :169/:178 belong to a coroutineScope (:66) that is never cancelled, so the comment at :411-412 claiming no coroutine touches the DB is false. The straggler either throws IllegalStateException inside insertStepCount (swallowed, steps vanish, prefs overwritten with the residual) or SQLiteOpenHelper.getWritableDatabase() silently REOPENS the just-closed DB on a leaked connection that coexists with the restarted service&#x27;s new connection (lock/busy errors then swallowed per EC-4). Its onFlushSuccess also calls NotificationManager.notify after stopForeground removed the FGS notification, leaving a plain ongoing &#x27;Today&#x27;s Steps: N&#x27; notification with no service behind it (BackgroundServiceManager.kt:217-223).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Loss of the final buffer at service stop, intermittent silently-dropped flushes after every stop/start cycle (leaked connection), and a lingering undismissable stale notification after the user stopped tracking.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">DB never closed; one scope cancelled-and-joined; flush under `stateMutex`; notification updates gated on liveness. Straggler class deleted.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="lifecycle" data-st="partial">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-41</span>
+<span class="sym">Lost</span>
+<span class="scenario">Android 13+ POST_NOTIFICATIONS denied: the FGS starts fine but its notification is never shown, so the user cannot tell tracking is on. Separately, an&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-partial">Mostly fixed (narrow residual)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">No POST_NOTIFICATIONS handling anywhere; updateNotification() (BackgroundServiceManager.kt:217-223) silently no-ops when denied. No onTaskRemoved override and no watchdog (alarm/WorkManager) exists to notice the Task Manager kill, so recovery waits for the next boot or app launch.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Invisible tracking state (user cannot tell it is on, or that it died), unexplained multi-hour gaps, then a catch-up lump; buffered steps at kill are lost.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">onTaskRemoved restart job; `notificationsGranted` in `getTrackingStatus`; resume-notification path.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-42</span>
+<span class="sym">Trust</span>
+<span class="scenario">User explicitly stops tracking via stopBackgroundService(); later the phone reboots or the app auto-updates (MY_PACKAGE_REPLACED).</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">BootServiceManager (BootServiceManager.kt:16-30) starts the service unconditionally for every boot/update action; there is no persisted &#x27;tracking enabled&#x27; flag anywhere, and stopBackgroundService does not disable the receiver (PackageManager.setComponentEnabledSetting is never used).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Tracking and the foreground notification silently resurrect after the user turned them off: steps get recorded during periods the user believes tracking was disabled (trust and privacy issue).</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">`tracking_enabled` in DPS prefs gates receiver, watchdog job, alarms, and STICKY restarts.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-43</span>
+<span class="sym">Dead</span>
+<span class="scenario">A third-party app adds the steps_count plugin from pub and calls startBackgroundService(). The plugin&#x27;s own manifest (android/src/main/AndroidManifest&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">startForegroundService with an explicit intent for an undeclared service fails to resolve without throwing, so StepsCountPlugin.startBackgroundService still calls result.success(true) (StepsCountPlugin.kt:83-90). No boot receiver exists in the consumer app unless hand-copied from the example.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Every integrator who does not manually replicate the example manifest ships an app where tracking never starts (and never restarts on boot) while the plugin reports success: service dead by default for all consumers.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Service, receiver, permissions, uses-feature, and backup rules ship in the plugin manifest and merge into every consumer.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-44</span>
+<span class="sym">Trust</span>
+<span class="scenario">Dart calls getStepCount/getTimeline with startDate=0 (meaning &#x27;from the beginning&#x27;), a seconds-based timestamp, or any value that fits in 32 bits; or &hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StandardMethodCodec delivers Dart ints that fit in 32 bits as java.lang.Integer; call.argument&lt;Long&gt;(&quot;startDate&quot;) (StepsCountPlugin.kt:154-155, 169-170, 185) performs an unchecked cast to java.lang.Long and throws ClassCastException, converted into result.error. There is no Number-based coercion such as (arg as Number).toLong().</p>
+<p class="risk"><span class="risk-l">Symptom</span> Legitimate queries fail with STEP_COUNT_ERROR/TIMELINE_ERROR; an app that passes 0 as &#x27;no lower bound&#x27; can never read any steps.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P5</span></div>
+<p class="ba-t">`(argument&lt;Number&gt;)?.toLong()` coercion in all handlers.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-45</span>
+<span class="sym">Loss</span>
+<span class="scenario">App calls getTimelineAfter(null) (documented as &#x27;return the entire timeline&#x27;) or getTimeline over months. At ~1 row per 50 steps, an active user gener&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">All method-channel handlers run on the platform main thread and perform synchronous SQLite queries plus full List&lt;Map&gt; materialization there (StepsCountPlugin.kt:139-195 -&gt; StepCountManager.kt:319-402 -&gt; StepCountDatabase queries). No background executor, no paging.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Multi-second UI freezes and ANRs in the host app during sync/history screens; users force-stop the app, which also kills the tracking service (compounding step loss via EC-23).</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P5</span></div>
+<p class="ba-t">All handlers dispatch DB work to `Dispatchers.IO`, reply on main; `seq` paging enables chunked sync.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-46</span>
+<span class="sym">Dead</span>
+<span class="scenario">Device has no TYPE_STEP_COUNTER (still common on entry-level units in the same markets as POCO/Realme), or registerListener returns false (sensor HAL &hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">getDefaultSensor returns null and registerSensor silently no-ops via the ?.let (BackgroundServiceManager.kt:134-149); the false-return path only logs a warning with no retry. The health foreground service runs forever showing &#x27;Today&#x27;s Steps: 0&#x27;, isServiceRunning() returns true (StepsCountPlugin.kt:129-136), and there is no method-channel signal that step counting is impossible or failed. No uses-feature declaration or capability API exists.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Service dead but reported as running: app shows permanent 0 with no way to distinguish &#x27;no hardware&#x27; from &#x27;no steps&#x27;.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Null sensor / register-false retried with backoff then service self-stops with `no_sensor`; status API distinguishes &quot;no hardware&quot; from &quot;no steps&quot;; uses-feature declared.</p>
+</div>
+</div>
+</details><details class="case" data-sev="medium" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-medium"></span>
+<span class="ec">EC-47</span>
+<span class="sym">Misattribution</span>
+<span class="scenario">The LOCAL vs UTC API contract is fictional: an integrator reads the docs (&#x27;input timestamps are always treated as local time&#x27;, &#x27;converted to UTC for d&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-medium">medium</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">convertLocalTimestampToUtc and convertUtcTimestampToLocal are mathematical identities (TimeStampUtils.kt:41-56): Instant -&gt; rezone -&gt; Instant returns the same epoch milli. TimeZoneType.LOCAL and UTC return byte-identical timestamps (StepCountManager.kt:345-360); the misleading comments live at StepCountManager.kt:255-266 and :327. Everything only works because both sides pass unshifted epoch millis, and there is no schema marker recording which time semantics a row was written under (StepCountDatabase.kt:33-39).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Misattribution: a consumer that honors the documented contract shifts every window by the zone offset (5.5h in India), pushing all midnight-adjacent steps onto the wrong day. Any future &#x27;repair&#x27; of the conversion desyncs old rows from new by the zone offset overnight; the fix must preserve identity semantics (pure epoch) and correct the docs instead.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P5</span></div>
+<p class="ba-t">Converters stay identities; docs corrected to &quot;epoch ms everywhere&quot;; no shifting &quot;fix&quot; ever permitted.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-48</span>
+<span class="sym">Spike</span>
+<span class="scenario">event.values[0] is float32: above 2^24 = 16,777,216 cumulative steps, consecutive integers are unrepresentable and the value quantizes to multiples of&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">The Double math at StepCountManager.kt:133 cannot recover precision the HAL already lost in the float, so deltas become lumpy (0 then 2) at high counts; totals are approximately preserved. NaN: Double.roundToInt() throws IllegalArgumentException, caught by the wrapper at :181-183, event skipped and baseline untouched (verified safe by accident).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Minor precision loss at extreme counts; NaN handled safely only incidentally (the catch also masks real errors); +Infinity feeds the critical EC-1 spike path instead.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P1</span></div>
+<p class="ba-t">Anchor stores the exact float as REAL; Double delta math; NaN/Inf rejected explicitly pre-math; sub-2^24 quantization lumpiness absorbed by interval attribution (benign).</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-49</span>
+<span class="sym">Loss</span>
+<span class="scenario">Negative delta is neither a necessary nor a sufficient reboot signal. Sufficient-side counterexample: the sensor hub restarts mid-session WITHOUT a re&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Hub crash: negative delta hits StepCountManager.kt:171-178, is labeled &#x27;Sensor reset&#x27;, re-baselines, and flushes pending; steps between the last delivered event and the crash are lost (usually small). Samsung persistence: benign today, the baseline stays continuous and counting is correct (:133-155).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Small loss on hub crashes; more importantly a conceptual trap constraining any future reboot-detection fix: it must use a real boot-session marker (boot count / elapsedRealtime anchor) and handle both hub persistence models, never key off the negative-delta branch.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">documented</span></div>
+<p class="ba-t">Reboot = BOOT_COUNT change only; same-boot negative delta = hub reset: pre-flush delivered steps, credit gated `v` as `gap`, re-anchor; persistent hubs via Case B.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-50</span>
+<span class="sym">Phantom</span>
+<span class="scenario">Sensor reports SENSOR_STATUS_UNRELIABLE or accuracy transitions during hub recalibration (seen after firmware updates and hub resets on Vivo/OPPO); va&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">onAccuracyChanged is an empty stub (BackgroundServiceManager.kt:237-239); event.accuracy is also never read. Deltas produced during unreliable windows are trusted identically to good data and flow into the same accept-up-to-500K path (StepCountManager.kt:143-155).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Occasional phantom jumps accepted with no evidence trail; cheap to at least log accuracy alongside batch_detected.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">`onAccuracyChanged` logged; UNRELIABLE-window rows flagged LOW_ACCURACY; jumps still rate-gated.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="sensor" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-51</span>
+<span class="sym">Trust</span>
+<span class="scenario">Duplicate or same-value events: OEM HALs re-deliver the current cumulative value on registration heartbeats or connection re-syncs; a second in-proces&hellip;</span>
+<span class="tags">
+<span class="chip cat">Sensor / HW</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Verified non-bug for counting: delta 0 falls through both branches (StepCountManager.kt:135 and :171) with no accumulation. Side effects only: stepCountChannel?.invokeMethod fires per event (:180) and saveBaseline rewrites prefs per event (:109-115, every nonzero delta), both on the main thread since registerListener with a null Handler delivers on the main looper.</p>
+<p class="risk"><span class="risk-l">Symptom</span> None to counts; minor main-thread churn during dense event streams.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P4</span></div>
+<p class="ba-t">Zero delta = heartbeat, memory-only; events on a HandlerThread; no per-event prefs writes exist; channel invokes throttled.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-52</span>
+<span class="sym">Loss</span>
+<span class="scenario">The overflow cap is get-then-add, not atomic: with pending near MAX_PENDING_STEPS (reachable while draining a huge deferred backlog), the main thread &hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepCountManager.kt:158-166: pendingSteps.get() at :158 and addAndGet at :161 are separate operations racing the getAndSet at :206; the restore at :233-234 bypasses the cap.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Silent partial loss in exactly the backlogged regime the cap was added to protect.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">Pending cap and get-then-add arithmetic deleted; credit derives from counter arithmetic in one place under the mutex.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="code-bug" data-st="partial">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-53</span>
+<span class="sym">Lost</span>
+<span class="scenario">A UI or sync query lands between the flush&#x27;s getAndSet(0) and the insert commit: the reader sees neither the pending buffer (already zeroed) nor the n&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-partial">Mostly fixed (narrow residual)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">flush does pendingSteps.getAndSet(0) at StepCountManager.kt:206, then inserts at :221-222; getTodaysCount (:301-303) and getStepCount (:268-272) add pendingSteps.get() to an uncoordinated DB read, so the reported total drops by up to the in-flight amount (up to 50,000 after a batch) and then jumps back.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Visible count regression for one reading: a regressing step counter is a classic trust-destroying report even though no data is lost; change-triggered sync layers can persist the dip.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P5</span></div>
+<p class="ba-t">Readers share `stateMutex` with flush; totals are monotone through a flush.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-54</span>
+<span class="sym">Double-Count</span>
+<span class="scenario">Inclusive-end range double count: an app sums contiguous windows [day1Start, day2Start] and [day2Start, day3Start], and a flush row lands exactly on t&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">buildDateQuery uses &#x27;timestamp &gt;= ? AND timestamp &lt;= ?&#x27;, inclusive on BOTH ends (StepCountDatabase.kt:301-305), so the boundary row satisfies both adjacent queries; the plugin docs also describe endDate as inclusive (lib/steps_count.dart:83) with no half-open convention documented or enforced.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Occasional double-counted row (up to 50,000 steps) when apps use natural [start, nextStart] chunking; weekly sum exceeds the timeline sum.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">Midnight-split rows end at `midnight - 1 ms`; strictly-increasing timestamps; half-open internal windows; boundary rows satisfy exactly one window; half-open chunking documented.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="time" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-55</span>
+<span class="sym">Trust</span>
+<span class="scenario">DST boundary anomalies. Fall-back landing before midnight (00:00 jumping back to 23:00, e.g. historical America/Sao_Paulo rules in some OEM tzdata): t&hellip;</span>
+<span class="tags">
+<span class="chip cat">Time / clock</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">getTodaysTimestamp builds boundaries via LocalDate.atTime and atZone(systemDefault) (TimeStampUtils.kt:25-34); app-side ranges arrive as raw epoch millis from Dart (lib/steps_count_method_channel.dart:74-78) and are used as-is because the converters are identity (TimeStampUtils.kt:41-45).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Up to an hour of steps matching neither day&#x27;s window forever (fall-back), and plugin-vs-app disagreement of up to one hour on the same day&#x27;s total (spring-forward); day sums stop reconciling with the timeline.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P3</span></div>
+<p class="ba-t">`atStartOfDay(zone)` half-open windows tile fall-back and spring-forward exactly; write-time splitting means no row straddles the anomalous hour.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="lifecycle" data-st="limit">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-56</span>
+<span class="sym">Misattribut</span>
+<span class="scenario">Multi-user and work profile: the hardware TYPE_STEP_COUNTER is one global per-device counter, but each user/profile gets its own prefs, DB, service, a&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-limit">Mitigated (documented limit)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">No user/profile awareness anywhere; both instances independently baseline the same physical counter and record the same physical steps (StepCountManager.kt:122-184). Suspension gaps become single catch-up deltas stamped at switch-back (:221).</p>
+<p class="risk"><span class="risk-l">Symptom</span> Same steps counted twice when both profiles sync to one account; lump misattribution at profile switch/unpause. Rare configuration.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">documented</span></div>
+<p class="ba-t">Documented limitation (one physical counter, per-profile instances); `boot_count` + `install_id` in rows let a backend detect same-device duplicates.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="code-bug" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-57</span>
+<span class="sym">Corrupt</span>
+<span class="scenario">The static MethodChannel outlives the Flutter engine: onAttachedToEngine assigns StepCountManager.stepCountChannel (StepsCountPlugin.kt:29); the user &hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">onDetachedFromEngine clears only the call handler, never the static channel (StepsCountPlugin.kt:264-266); StepCountManager.kt:180 keeps calling invokeMethod on the dead engine&#x27;s messenger. The throw is swallowed by the catch at :181-183 after buffering completes, so counts survive, but the destroyed engine and messenger are pinned by the static for the service&#x27;s lifetime.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Engine memory leak and per-event exception overhead in the long-running service; with mismatched multi-engine ordering, live UI stops receiving onSensorChanged updates (display staleness, not DB corruption).</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P5</span></div>
+<p class="ba-t">Static channel cleared on matching engine detach.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="lifecycle" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-58</span>
+<span class="sym">Misattribut</span>
+<span class="scenario">Stop-path fragility: (a) stopBackgroundService delivers the stop via context.startService(FORCE_STOP); if the FGS already died and the app is backgrou&hellip;</span>
+<span class="tags">
+<span class="chip cat">Lifecycle</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">Stop-by-startService at BackgroundServiceManager.kt:36-41; unconditional START_REDELIVER_INTENT at :77; exception caught at StepsCountPlugin.kt:124-126; no stopService()/component-disable fallback.</p>
+<p class="risk"><span class="risk-l">Symptom</span> User-requested stops silently fail from background contexts (service keeps running against intent), &#x27;stop&#x27; of a stopped service fabricates a misattributed step row, and the service flaps after kills during stop.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">-</span></div>
+<p class="ba-t">Flag-first stop + `stopService()` fallback + `START_NOT_STICKY` after stop; a stopped service cannot fabricate rows (no pending buffer exists).</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="code-bug" data-st="partial">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-59</span>
+<span class="sym">Spike</span>
+<span class="scenario">exportStepsDatabase (the diagnostic tool for investigating these very spikes) runs while the service is actively flushing, or after runWalCheckpointFu&hellip;</span>
+<span class="tags">
+<span class="chip cat">Code bug</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-partial">Mostly fixed (narrow residual)</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepsCountPlugin.kt:224-249 does checkpoint-then-copy with no write quiescence; commits after the checkpoint land in the -wal file, which copyFile (:256-262) never copies (no -wal/-shm handling), so the export silently misses the newest rows; a concurrent checkpoint can rewrite the main file mid-copy, producing a torn export. The manager-null fallback also opens a second READWRITE connection to the live file (:226-240), inviting busy/locked errors on the write side that EC-4 swallows. The method returns success with the file path regardless.</p>
+<p class="risk"><span class="risk-l">Symptom</span> Stale or corrupt diagnostic exports reported as success (undermining the spike investigation), plus a narrow window for live silent loss.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P5</span></div>
+<p class="ba-t">Export under `stateMutex`: VACUUM INTO (API 30+) or checkpoint + db/-wal/-shm copy, integrity-checked; failures loud.</p>
+</div>
+</div>
+</details><details class="case" data-sev="low" data-cat="persistence" data-st="fixed">
+<summary>
+<span class="stripe sev-low"></span>
+<span class="ec">EC-60</span>
+<span class="sym">Trust</span>
+<span class="scenario">User rolls back to an older APK build (Play staged-rollout rollback, sideload) whose code predates DB v2 while step_count.db on disk is already versio&hellip;</span>
+<span class="tags">
+<span class="chip cat">Persistence</span>
+<span class="chip sev-tag sev-low">low</span>
+<span class="pill st-fixed">Fixed</span>
+</span>
+</summary>
+<div class="body">
+<div class="ba before">
+<div class="ba-h">Before <span class="ph">original code</span></div>
+<p class="ba-t">StepCountDatabase does not override onDowngrade, so SQLiteOpenHelper throws SQLiteException(&#x27;Can&#x27;t downgrade database&#x27;) on every open; every read returns 0/empty and every insert returns null, all swallowed (StepCountDatabase.kt:145-148, 199-202).</p>
+<p class="risk"><span class="risk-l">Symptom</span> App shows zero steps and records nothing, permanently, even though the data file is intact; no error surfaces anywhere.</p>
+</div>
+<div class="ba after">
+<div class="ba-h">After <span class="ph">P2</span></div>
+<p class="ba-t">`onDowngrade` no-op preserving data; v3 keeps the `timestamp` column name so older readers still see rows.</p>
+</div>
+</div>
+</details>
+</section>
+
+<section class="limits">
+<h2>The five documented limits</h2>
+<p>These are the honest ceilings of a sensor-only design. Each is mitigated and, where possible, marked in the data rather than hidden.</p>
+<ul>
+<li><b>EC-37 Vibration miscounts</b> &mdash; cheap sensor hubs count road vibration as steps at the hardware level. The rate gate clips only impossible bursts; genuine hub false-positives pass. Per-event cadence is logged for future heuristics.</li>
+<li><b>EC-38 Frozen-but-delivering hub</b> &mdash; a hub stuck at one value is detected by the progress watchdog and re-registered, but steps lost <em>inside</em> the freeze window are unrecoverable.</li>
+<li><b>EC-23 Force-stop gaps</b> &mdash; a user force-stop blocks all restart paths until the app is next opened; the outage is bounded and marked, not erased.</li>
+<li><b>EC-56 Multi-profile duplication</b> &mdash; one physical counter, one instance per work/personal profile; a shared account can double-count. Rows carry boot/install ids so a backend can detect it.</li>
+<li><b>EC-36 Timezone re-bucketing</b> &mdash; historical day totals recompute under a new zone after travel; epoch-pure rows re-bucket honestly, but old and new zone views differ by design.</li>
+</ul>
+<p class="deferred"><b>Deferred enhancements</b> (tracked, not blocking): a seq-based sync cursor (needs one more migration) and a JobScheduler + tap-to-resume notification for the Android 12+ background-start limit.</p>
+</section>
+
+<footer class="foot">
+<div class="legend">
+<span class="lg"><span class="sw sev-critical"></span>Critical</span>
+<span class="lg"><span class="sw sev-high"></span>High</span>
+<span class="lg"><span class="sw sev-medium"></span>Medium</span>
+<span class="lg"><span class="sw sev-low"></span>Low</span>
+<span class="lg"><span class="sw st-fixed"></span>Fixed</span>
+<span class="lg"><span class="sw st-partial"></span>Partial</span>
+<span class="lg"><span class="sw st-limit"></span>Limit</span>
+</div>
+<p>Phases: P1 anti-spike gates &middot; P2 exactly-once durability &middot; P3 interval time-attribution &middot; P4 lifecycle + direct-boot &middot; P5 query API &amp; observability. Click any case to see the exact before/after. Coverage claims reflect the shipped implementation; device testing pending.</p>
+</footer>
+</div><script>
+(function(){
+  var state={sev:"all",cat:"all",st:"all"};
+  var cases=Array.prototype.slice.call(document.querySelectorAll(".case"));
+  var shown=document.getElementById("shown");
+  function apply(){
+    var n=0;
+    cases.forEach(function(c){
+      var ok=(state.sev==="all"||c.dataset.sev===state.sev)
+           &&(state.cat==="all"||c.dataset.cat===state.cat)
+           &&(state.st==="all"||c.dataset.st===state.st);
+      c.hidden=!ok; if(ok)n++;
+    });
+    shown.textContent=n;
+  }
+  document.querySelectorAll(".fb").forEach(function(b){
+    b.addEventListener("click",function(){
+      var k=b.dataset.k;
+      state[k]=b.dataset.v;
+      document.querySelectorAll('.fb[data-k="'+k+'"]').forEach(function(x){x.classList.remove("on")});
+      b.classList.add("on");
+      apply();
+    });
+  });
+})();
+</script>
