@@ -40,55 +40,21 @@ dependencies:
 
 ### Android Setup
 
-#### 1. Permissions
+#### 1. Permissions and components (auto-merged)
 
-Add the following permissions to your `android/app/src/main/AndroidManifest.xml`:
+As of 0.1.0 the plugin declares its own permissions, foreground service,
+`uses-feature`, and boot receiver in its manifest, and these merge into your app
+automatically. You no longer need to copy the `<service>`, `<receiver>`, or
+`<uses-permission>` entries into your app manifest.
 
-```xml
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    
-    <!-- Required permissions for step counting -->
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
-    
-    <!-- Auto-start permissions -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+The merged permissions are: `ACTIVITY_RECOGNITION`, `POST_NOTIFICATIONS`,
+`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_HEALTH`, and `RECEIVE_BOOT_COMPLETED`.
+You still request the runtime permissions below.
 
-    <application>
-        <!-- Your existing application configuration -->
-        
-        <!-- Add the background service -->
-        <service
-            android:name="com.dajiraj.steps_count.BackgroundServiceManager"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="health" />
-            
-        <!-- Add boot receiver for auto-start -->
-        <receiver android:name="com.dajiraj.steps_count.BootServiceManager"
-            android:enabled="true"
-            android:exported="true"
-            android:directBootAware="true">
-            <intent-filter android:priority="1000">
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
-                <action android:name="android.intent.action.USER_UNLOCKED" />
-                <action android:name="android.intent.action.USER_PRESENT" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <data android:scheme="package" />
-            </intent-filter>
-        </receiver>
-        
-    </application>
-</manifest>
-```
+Optional: the plugin keeps its baseline in device-protected storage and anchors it
+to the boot session, so a restore cannot fabricate steps. If you also want to keep
+the SQLite history out of cloud/device-transfer backups, add backup rules excluding
+`step_count.db*` and `steps_count_*` prefs to your app's `<application>`.
 
 #### 2. Runtime Permissions
 
@@ -268,8 +234,18 @@ await stepsCount.stopBackgroundService();
 | `getTodaysCount()` | `Future<int>` | Gets step count for today | Both |
 | `getStepCounts({startDate, endDate})` | `Future<int>` | Gets total steps for date range | Both |
 | `getTimeline({startDate, endDate, timeZone})` | `Future<List<TimelineModel>>` | Gets detailed timeline data | Both |
+| `getTimelineAfter({lastSyncTimestamp})` | `Future<List<TimelineModel>>` | Timeline entries recorded after a UTC millisecond watermark (for incremental sync) | Both |
+| `getStepSources({startDate, endDate})` | `Future<List<StepSourceInfo>>` | Lists HealthKit step contributors (empty on Android) | iOS |
+| `getTrackingStatus()` | `Future<StepTrackingStatus>` | Service/sensor/permission state and data staleness, for detecting degraded tracking | Both |
 | `exportStepsDatabase()` | `Future<String?>` | Exports the local steps database file (Android only) | Android |
 
+### Timeline entry fields
+
+Each `TimelineModel` carries `stepCount` and a `timestamp` (interval end, ms since
+epoch). On Android it also exposes `startTimestamp` (interval start), `source`
+(`live`, `gap`, `boot_gap`, or `legacy`), `flags`, and `isEstimated` (true for a
+recovered `gap`/`boot_gap` window). A recovered catch-up after downtime spans
+`startTimestamp` to `timestamp` rather than collapsing to a single instant.
 
 ## Contributing
 
