@@ -59,9 +59,6 @@ class StepCountManager(
         private const val KEY_PENDING_STEPS = "pending_steps"
         private const val KEY_BOOT_ID = "boot_id"
         private const val KEY_MIGRATED_TO_ANCHOR = "migrated_to_anchor_v2"
-        // Device-protected-storage flags (config only; never counting state).
-        private const val FLAGS_PREFS = "steps_count_flags"
-        private const val KEY_MOVED_TO_DPS = "moved_to_dps"
 
         // Flush thresholds
         private const val FLUSH_STEP_THRESHOLD = 50
@@ -218,7 +215,7 @@ class StepCountManager(
         // ---- Service-less reads (EC-30): query the DB directly when no service/manager is running ----
 
         private fun dbFor(context: Context): StepCountDatabase =
-            StepCountDatabase.getInstance(context.applicationContext.createDeviceProtectedStorageContext())
+            StepCountDatabase.getInstance(context) // resolves device-protected storage internally
 
         /** Today's count straight from the DB (no unflushed buffer, since nothing is running). */
         fun readTodaysCount(context: Context): Int {
@@ -317,19 +314,9 @@ class StepCountManager(
     private var flushJob: Job? = null
 
     init {
-        // Move the DB + prefs into device-protected storage once (idempotent, guarded by a flag).
-        val flags = dpsContext.getSharedPreferences(FLAGS_PREFS, Context.MODE_PRIVATE)
-        if (!flags.getBoolean(KEY_MOVED_TO_DPS, false)) {
-            try {
-                dpsContext.moveDatabaseFrom(appContext, StepCountDatabase.DATABASE_NAME)
-                dpsContext.moveSharedPreferencesFrom(appContext, PREFS_NAME)
-                Log.d(TAG, "Moved DB + prefs to device-protected storage")
-            } catch (e: Exception) {
-                Log.e(TAG, "DPS move failed (continuing on default storage): ${e.message}")
-            }
-            flags.edit().putBoolean(KEY_MOVED_TO_DPS, true).apply()
-        }
-        database = StepCountDatabase.getInstance(dpsContext)
+        // getInstance() opens the DB on device-protected storage and performs the one-time move of the
+        // DB + legacy prefs from credential-encrypted storage, so read the prefs from DPS to match.
+        database = StepCountDatabase.getInstance(appContext)
         prefs = dpsContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         recoverOnStart()
         startPeriodicFlush()
@@ -353,22 +340,28 @@ class StepCountManager(
             return
         }
 
-        if (st.bootId.isEmpty() || st.bootId == thisBootId) {
-            // Same boot session (or a legacy anchor with no boot id): trust it. The first event's
-            // delta re-derives any steps that were unflushed when the process last died (EC-12).
+        // A stored anchor whose elapsed time is AHEAD of the current monotonic clock can only mean the
+        // clock reset, i.e. a reboot happened, even on devices where BOOT_COUNT is unavailable and the
+        // boot id looks unchanged (EC regression check). Treat that as a boot change.
+        val elapsedRegressed = st.anchorElapsedMs > SystemClock.elapsedRealtime() + 1_000
+
+        if (st.bootId == thisBootId && !elapsedRegressed) {
+            // Same boot session: trust the anchor. The first event's delta re-derives any steps that
+            // were unflushed when the process last died (EC-12).
             anchorCounter = st.anchorCounter
             anchorElapsedMs = st.anchorElapsedMs
             anchorWallMs = st.anchorWallMs
-            anchorBootId = if (st.bootId.isEmpty()) thisBootId else st.bootId
+            anchorBootId = st.bootId
             lastRowEndMs = st.lastRowEndMs
             lastEventCounter = st.anchorCounter
             lastEventElapsedMs = st.anchorElapsedMs
             Log.d(TAG, "recoverOnStart: ANCHORED at ${st.anchorCounter} (boot=$anchorBootId)")
         } else {
-            // Different boot session or device (missed reboot, restore, reinstall). The anchor is
-            // radioactive (EC-2/EC-11): void it so the first event re-anchors with zero credit. Step
-            // history rows are kept (real data).
-            Log.w(TAG, "recoverOnStart: boot/device changed (${st.bootId} -> $thisBootId); voiding anchor")
+            // Different boot session or device (missed reboot, restore, reinstall), an empty/unknown
+            // stored boot id, or a monotonic-clock regression. The anchor is radioactive (EC-2/EC-11):
+            // void it so the first event re-anchors with zero credit. Step history rows are kept.
+            Log.w(TAG, "recoverOnStart: boot/device changed (${st.bootId} -> $thisBootId, " +
+                       "elapsedRegressed=$elapsedRegressed); voiding anchor")
             anchorCounter = Double.NaN
             lastEventCounter = Double.NaN
         }
@@ -390,25 +383,34 @@ class StepCountManager(
             return
         }
 
-        if (wasInitialized) {
-            val baseline = prefs.getFloat(KEY_LAST_SENSOR_VALUE, 0f).toDouble()
-            val pending = prefs.getInt(KEY_PENDING_STEPS, 0).coerceAtLeast(0)
-            val oldBootId = prefs.getString(KEY_BOOT_ID, "") ?: ""
-            val now = TimeStampUtils.getCurrentUtcTimestamp()
-            // Book any un-flushed Phase 1 steps so they are not lost, then anchor at the old baseline.
-            val rows = splitIntoRowChunks(pending.toLong(), MAX_STEPS_PER_ROW)
-                .map { StepRow(it, now, now, "legacy", 0) }
-            val seeded = AnchorState(
-                anchorCounter = baseline,
-                anchorElapsedMs = 0L,
-                anchorWallMs = now,
-                bootId = if (oldBootId.isNotEmpty()) oldBootId else thisBootId,
-                lastRowEndMs = now
-            )
-            val ok = database.commitFlush(rows, seeded)
-            Log.d(TAG, "Legacy prefs migrated: baseline=$baseline pending=$pending ok=$ok")
+        if (!wasInitialized) {
+            // Fresh install / no Phase 1 baseline: nothing to migrate.
+            prefs.edit().putBoolean(KEY_MIGRATED_TO_ANCHOR, true).apply()
+            return
         }
 
+        val baseline = prefs.getFloat(KEY_LAST_SENSOR_VALUE, 0f).toDouble()
+        val pending = prefs.getInt(KEY_PENDING_STEPS, 0).coerceAtLeast(0)
+        val oldBootId = prefs.getString(KEY_BOOT_ID, "") ?: ""
+        val now = TimeStampUtils.getCurrentUtcTimestamp()
+        // Book any un-flushed Phase 1 steps so they are not lost, then anchor at the old baseline.
+        val rows = splitIntoRowChunks(pending.toLong(), MAX_STEPS_PER_ROW)
+            .map { StepRow(it, now, now, "legacy", 0) }
+        val seeded = AnchorState(
+            anchorCounter = baseline,
+            anchorElapsedMs = 0L,
+            anchorWallMs = now,
+            bootId = if (oldBootId.isNotEmpty()) oldBootId else thisBootId,
+            lastRowEndMs = now
+        )
+        if (!database.commitFlush(rows, seeded)) {
+            // Do NOT mark done or clear the legacy prefs: retry next launch so the Phase 1 baseline
+            // and pending steps are never lost to a transient DB failure.
+            Log.e(TAG, "Legacy migration commit failed; will retry next launch")
+            return
+        }
+
+        Log.d(TAG, "Legacy prefs migrated: baseline=$baseline pending=$pending")
         prefs.edit()
             .putBoolean(KEY_MIGRATED_TO_ANCHOR, true)
             .remove(KEY_LAST_SENSOR_VALUE)
@@ -509,13 +511,21 @@ class StepCountManager(
 
             if (delta < 0) {
                 // Negative delta without a boot change = in-session hardware counter reset (EC-49).
-                // Flush what was already delivered, then re-anchor to the new low value (zero credit
-                // for the reset gap). lastEventCounter is left high so the flush credits the real steps.
-                Log.w(TAG, "counter_reset ref=$ref new=$v; flush then re-anchor")
+                // Capture the pre-reset counter/wall, then IMMEDIATELY lower lastEventCounter to the
+                // post-reset value on this (sensor) thread so subsequent events compute correct deltas
+                // and do not spam the reset path. A dedicated handler credits the captured pre-reset
+                // steps and re-anchors to v; it never touches lastEventCounter (owned here).
+                Log.w(TAG, "counter_reset ref=$ref new=$v; crediting pre-reset then re-anchor")
                 clearQuarantine()
+                val preResetCounter = if (lastEventCounter.isNaN()) anchorCounter else lastEventCounter
+                val preResetWall = lastEventWallMs
+                lastEventCounter = v
+                lastEventElapsedMs = elapsedMs
+                lastEventWallMs = wallMs
+                lastProgressElapsed = nowElapsed
+                sawZeroDeltaSinceProgress = false
                 coroutineScope.launch(dbDispatcher) {
-                    flushLocked()
-                    anchorToLocked(v, elapsedMs, wallMs)
+                    handleCounterResetLocked(preResetCounter, preResetWall, v, elapsedMs, wallMs)
                 }
                 stepCountChannel?.invokeMethod("onSensorChanged", null)
                 return
@@ -689,7 +699,11 @@ class StepCountManager(
         }
     }
 
-    /** Re-anchor to [v] with zero credit (dbDispatcher): persist the anchor, then mirror it. */
+    /**
+     * Persist a zero-credit anchor at [v] (dbDispatcher) and mirror the ANCHOR fields only. The
+     * lastEvent* fields are owned by the sensor thread (set in [anchorHere]); this must not write them,
+     * or it would clobber a concurrently-arriving event.
+     */
     private suspend fun anchorToLocked(v: Double, elapsedMs: Long, wallMs: Long) = stateMutex.withLock {
         val newAnchor = AnchorState(
             anchorCounter = v,
@@ -698,15 +712,46 @@ class StepCountManager(
             bootId = thisBootId,
             lastRowEndMs = maxOf(lastRowEndMs, 0L)
         )
-        val persisted = database.setAnchor(newAnchor)
-        if (!persisted) Log.e(TAG, "anchorTo failed to persist; keeping in-memory mirror ($v)")
+        if (!database.setAnchor(newAnchor)) Log.e(TAG, "anchorTo failed to persist; keeping mirror ($v)")
         anchorCounter = v
         anchorElapsedMs = elapsedMs
         anchorWallMs = wallMs
         anchorBootId = thisBootId
-        lastEventCounter = v
-        lastEventElapsedMs = elapsedMs
-        lastEventWallMs = wallMs
+    }
+
+    /**
+     * Handle an in-session counter reset (dbDispatcher): credit the captured pre-reset steps
+     * (anchor..[preResetCounter]) as interval rows over [anchorWall, [preResetWall]], then advance the
+     * anchor to the post-reset value [v] with zero credit for the reset gap, all in one transaction.
+     * Does NOT touch lastEvent* (the sensor thread already lowered them to v).
+     */
+    private suspend fun handleCounterResetLocked(
+        preResetCounter: Double, preResetWall: Long, v: Double, elapsedMs: Long, wallMs: Long
+    ) = stateMutex.withLock {
+        val credit = computeCredit(preResetCounter, anchorCounter)
+        val rows = if (credit > 0) {
+            val watermark = lastRowEndMs
+            val end = (if (preResetWall > 0) preResetWall else wallMs).coerceAtMost(wallMs + FUTURE_SLACK_MS)
+            val startRaw = if (anchorWallMs in 1..end) anchorWallMs else end
+            val safeStart = startRaw.coerceIn(watermark + 1, maxOf(watermark + 1, end))
+            val safeEnd = maxOf(safeStart, end.coerceAtLeast(watermark + 1))
+            val source = if (safeEnd - safeStart > GAP_SOURCE_THRESHOLD_MS) "gap" else "live"
+            splitAtMidnights(credit, safeStart, safeEnd, source, 0, ZoneId.systemDefault())
+        } else {
+            emptyList()
+        }
+        val lastEnd = if (rows.isNotEmpty()) rows.last().endTs else maxOf(lastRowEndMs, 0L)
+        val newAnchor = AnchorState(v, elapsedMs, wallMs, thisBootId, lastEnd)
+        if (database.commitFlush(rows, newAnchor)) {
+            Log.d(TAG, "counter_reset: credited $credit pre-reset steps as ${rows.size} row(s); anchor=$v")
+        } else {
+            Log.e(TAG, "counter_reset commit failed (rolled back); re-anchoring mirror to $v")
+        }
+        anchorCounter = v
+        anchorElapsedMs = elapsedMs
+        anchorWallMs = wallMs
+        anchorBootId = thisBootId
+        lastRowEndMs = lastEnd
     }
 
     fun runWalCheckpointForExport(): Boolean = database.runWalCheckpointFull()

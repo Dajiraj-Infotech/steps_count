@@ -92,7 +92,16 @@ class BackgroundServiceManager : Service(), SensorEventListener {
                     PendingIntent.getService(context, RESTART_ALARM_ID, intent, flags)
                 }
                 val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-                am.set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + delayMs, pi)
+                val triggerAt = SystemClock.elapsedRealtime() + delayMs
+                // setAndAllowWhileIdle fires even in Doze and needs no exact-alarm permission. NOTE: on
+                // Android 12+ the alarm-driven startForegroundService can still be blocked from the
+                // background (a documented framework limit); the JobScheduler + resume-notification
+                // path is the fuller answer and is tracked as a follow-up.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+                } else {
+                    am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+                }
                 Log.d(TAG, "Restart alarm scheduled in ${delayMs}ms")
             } catch (e: Exception) {
                 Log.e(TAG, "scheduleRestart failed: ${e.message}")
@@ -192,10 +201,18 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     }
 
     private fun startTracking() {
+        // Re-resolve the sensor if it was null at onCreate (some OEM HALs report null transiently after
+        // boot); this runs on every start command, boot, and alarm restart, giving repeated retries.
+        if (stepCounterSensor == null) initializeSensors()
         if (!isSensorRegistered) registerSensor()
         isRunning = true
-        if (!hasActivityRecognitionPermission(applicationContext)) {
-            Log.w(TAG, "ACTIVITY_RECOGNITION not granted; the sensor will deliver no events (EC-17)")
+        when {
+            stepCounterSensor == null ->
+                Log.w(TAG, "No TYPE_STEP_COUNTER sensor; steps cannot be recorded (see getTrackingStatus)")
+            !isSensorRegistered ->
+                Log.w(TAG, "Step sensor present but registration failed; will retry on next start")
+            !hasActivityRecognitionPermission(applicationContext) ->
+                Log.w(TAG, "ACTIVITY_RECOGNITION not granted; the sensor will deliver no events (EC-17)")
         }
         updateNotification()
         Log.d(TAG, "Tracking started (sensorRegistered=$isSensorRegistered)")
@@ -207,16 +224,34 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         stopSelf()
     }
 
-    /** Enter the foreground, returning false (instead of crashing) if the platform refuses (EC-18). */
+    /**
+     * Enter the foreground. Returns false (instead of crashing) when the platform refuses (EC-18). On
+     * a SecurityException from the typed health FGS (API 34+ without ACTIVITY_RECOGNITION), it still
+     * calls an UNTYPED startForeground to satisfy the startForegroundService contract, so the caller's
+     * subsequent stopSelf() cannot trigger a "did not start in time" crash.
+     */
     private fun startForegroundSafely(): Boolean {
+        val notification = try {
+            createInitialNotification()
+        } catch (e: Exception) {
+            Log.e(TAG, "notification build failed: ${e.message}")
+            return false
+        }
         return try {
-            val notification = createInitialNotification()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
             true
+        } catch (e: SecurityException) {
+            Log.e(TAG, "typed startForeground denied (${e.message}); satisfying contract then stopping")
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (ignored: Exception) {
+                // Even untyped is not allowed (e.g. background start restriction); stopSelf is the remedy.
+            }
+            false
         } catch (e: Exception) {
             Log.e(TAG, "startForeground failed: ${e.message}")
             false

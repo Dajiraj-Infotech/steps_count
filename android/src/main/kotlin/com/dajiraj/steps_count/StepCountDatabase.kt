@@ -82,7 +82,10 @@ data class StepRow(
  * close/reopen/straggler-flush race entirely (EC-40).
  */
 class StepCountDatabase(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION, RenameOnCorruptionHandler()) {
+    // Pass the context DIRECTLY (do NOT call .applicationContext): on a device-protected-storage
+    // context, .applicationContext returns the credential-encrypted Application, which would silently
+    // open the DB in the wrong storage. [getInstance] always passes an app-scoped DPS context.
+    SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION, RenameOnCorruptionHandler()) {
 
     companion object {
         private const val TAG = "StepCountDatabase"
@@ -134,17 +137,41 @@ class StepCountDatabase(context: Context) :
             )
         """
 
+        // Device-protected-storage flags (config only; never counting state).
+        private const val FLAGS_PREFS = "steps_count_flags"
+        private const val KEY_MOVED_TO_DPS = "moved_to_dps"
+        private const val LEGACY_PREFS = "steps_count_prefs"
+
         @Volatile
         private var instance: StepCountDatabase? = null
 
         /**
-         * Process-wide singleton. Pass a device-protected-storage context so the DB is readable
-         * before first unlock and is never included in Auto Backup (EC-2/EC-29). Never closed.
+         * Process-wide singleton opened on DEVICE-PROTECTED storage so the DB is readable before first
+         * unlock and is excluded from Auto Backup (EC-2/EC-29). Never closed (EC-40). The one-time move
+         * of the DB + legacy prefs from credential-encrypted storage happens here, so every caller
+         * (the service manager AND service-less reads) sees the migrated data.
          */
         fun getInstance(context: Context): StepCountDatabase =
             instance ?: synchronized(this) {
-                instance ?: StepCountDatabase(context.applicationContext).also { instance = it }
+                instance ?: create(context).also { instance = it }
             }
+
+        private fun create(context: Context): StepCountDatabase {
+            val app = context.applicationContext
+            val dps = app.createDeviceProtectedStorageContext()
+            val flags = dps.getSharedPreferences(FLAGS_PREFS, Context.MODE_PRIVATE)
+            if (!flags.getBoolean(KEY_MOVED_TO_DPS, false)) {
+                try {
+                    dps.moveDatabaseFrom(app, DATABASE_NAME)
+                    dps.moveSharedPreferencesFrom(app, LEGACY_PREFS)
+                    Log.d(TAG, "Moved DB + prefs to device-protected storage")
+                } catch (e: Exception) {
+                    Log.e(TAG, "DPS move failed (continuing on device-protected storage): ${e.message}")
+                }
+                flags.edit().putBoolean(KEY_MOVED_TO_DPS, true).apply()
+            }
+            return StepCountDatabase(dps)
+        }
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
