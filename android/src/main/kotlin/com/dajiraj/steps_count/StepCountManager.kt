@@ -18,6 +18,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import io.flutter.plugin.common.MethodChannel
+import java.time.Instant
+import java.time.ZoneId
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
@@ -93,6 +95,74 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         /** Upper bound on the blocking final flush at stop, so a slow disk cannot ANR the service. */
         private const val FINAL_FLUSH_TIMEOUT_MS = 2_000L
 
+        // Time attribution (Phase 3, EC-24/EC-25/EC-27).
+        /** A forward wall jump beyond the anchor-projected time by more than this is clamped (EC-25). */
+        private const val CLOCK_JUMP_SLACK_MS = 900_000L // 15 min
+        /** No stored timestamp may exceed now by more than this (EC-25 absolute backstop). */
+        private const val FUTURE_SLACK_MS = 2_000L
+        /** A flush window wider than this is a recovered gap, marked 'gap' and spread over the window. */
+        private const val GAP_SOURCE_THRESHOLD_MS = 300_000L // 5 min
+
+        // Row flags.
+        const val FLAG_CLOCK_CLAMPED = 1
+        const val FLAG_LOW_ACCURACY = 2
+
+        /**
+         * Distribute [steps] over the wall window [[startMs], [endMs]], splitting at local midnights so
+         * no row crosses a day boundary (day queries stay exact). Steps are apportioned by sub-window
+         * duration with largest-remainder rounding, so the row sum ALWAYS equals [steps]. Pure function,
+         * exposed for unit testing.
+         */
+        fun splitAtMidnights(
+            steps: Long, startMs: Long, endMs: Long, source: String, flags: Int, zone: ZoneId
+        ): List<StepRow> {
+            if (steps <= 0) return emptyList()
+            val s = minOf(startMs, endMs)
+            val e = maxOf(startMs, endMs)
+
+            // Sub-window boundaries: s, each local midnight strictly inside (s, e), then e.
+            val bounds = ArrayList<Long>()
+            bounds.add(s)
+            var day = Instant.ofEpochMilli(s).atZone(zone).toLocalDate()
+            while (true) {
+                val nextMidnight = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                if (nextMidnight >= e) break
+                bounds.add(nextMidnight)
+                day = day.plusDays(1)
+            }
+            bounds.add(e)
+
+            val n = bounds.size - 1
+            val totalDur = (e - s).coerceAtLeast(1)
+            val exact = DoubleArray(n)
+            val counts = LongArray(n)
+            var assigned = 0L
+            for (i in 0 until n) {
+                exact[i] = steps.toDouble() * (bounds[i + 1] - bounds[i]) / totalDur
+                counts[i] = floor(exact[i]).toLong()
+                assigned += counts[i]
+            }
+            // Largest-remainder: hand the leftover steps to the sub-windows with the biggest fractions.
+            var residue = steps - assigned
+            val order = (0 until n).sortedByDescending { exact[it] - counts[it] }
+            var k = 0
+            while (residue > 0 && n > 0) {
+                counts[order[k % n]]++
+                residue--
+                k++
+            }
+
+            val rows = ArrayList<StepRow>(n)
+            for (i in 0 until n) {
+                if (counts[i] <= 0) continue
+                val startTs = bounds[i]
+                // A midnight boundary belongs to the previous day, so an intermediate row ends 1 ms before it.
+                val endTs = if (i < n - 1) (bounds[i + 1] - 1).coerceAtLeast(startTs) else bounds[i + 1]
+                rows.add(StepRow(counts[i].toInt(), startTs, endTs, source, flags))
+            }
+            return rows
+        }
+
         var stepCountChannel: MethodChannel? = null
 
         /**
@@ -163,6 +233,8 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     // the sensor thread, read on dbDispatcher, hence @Volatile.
     @Volatile private var lastEventCounter: Double = Double.NaN
     @Volatile private var lastEventElapsedMs: Long = -1L
+    // Wall-clock time attributed to the last accepted event (Phase 3); the end of the next flush window.
+    @Volatile private var lastEventWallMs: Long = 0L
 
     // Quarantine state for implausible deltas (EC-3): read/written only on the sensor thread.
     private var quarantineActive = false
@@ -240,7 +312,8 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             val oldBootId = prefs.getString(KEY_BOOT_ID, "") ?: ""
             val now = TimeStampUtils.getCurrentUtcTimestamp()
             // Book any un-flushed Phase 1 steps so they are not lost, then anchor at the old baseline.
-            val chunks = splitIntoRowChunks(pending.toLong(), MAX_STEPS_PER_ROW)
+            val rows = splitIntoRowChunks(pending.toLong(), MAX_STEPS_PER_ROW)
+                .map { StepRow(it, now, now, "legacy", 0) }
             val seeded = AnchorState(
                 anchorCounter = baseline,
                 anchorElapsedMs = 0L,
@@ -248,7 +321,7 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
                 bootId = if (oldBootId.isNotEmpty()) oldBootId else thisBootId,
                 lastRowEndMs = now
             )
-            val ok = database.commitFlush(chunks, now, seeded)
+            val ok = database.commitFlush(rows, seeded)
             Log.d(TAG, "Legacy prefs migrated: baseline=$baseline pending=$pending ok=$ok")
         }
 
@@ -283,6 +356,23 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
 
     private fun unflushed(): Long = computeCredit(lastEventCounter, anchorCounter)
 
+    /**
+     * Wall-clock time to attribute to an event at monotonic [elapsedMs] (Phase 3). Recomputed per
+     * event, never a cached offset. Clamps a forward clock jump to the anchor-projected time (EC-25),
+     * caps at now+slack, and never goes below the watermark (EC-24/EC-27).
+     */
+    private fun attributeWall(elapsedMs: Long, nowElapsed: Long): Long {
+        val nowWall = TimeStampUtils.getCurrentUtcTimestamp()
+        var wallMs = nowWall - nowElapsed + elapsedMs
+        if (!anchorCounter.isNaN() && anchorElapsedMs > 0) {
+            val expectedWall = anchorWallMs + (elapsedMs - anchorElapsedMs)
+            if (wallMs > expectedWall + CLOCK_JUMP_SLACK_MS) wallMs = expectedWall
+        }
+        wallMs = minOf(wallMs, nowWall + FUTURE_SLACK_MS)
+        wallMs = maxOf(wallMs, lastRowEndMs + 1)
+        return wallMs
+    }
+
     // ---- Sensor ingestion (sensor callback thread) ----------------------------------------------
 
     /**
@@ -303,12 +393,13 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             val nowElapsed = SystemClock.elapsedRealtime()
             val evElapsed = eventTimestampNanos / 1_000_000
             val elapsedMs = if (evElapsed in 1..(nowElapsed + 10_000)) evElapsed else nowElapsed
+            val wallMs = attributeWall(elapsedMs, nowElapsed)
             val v = sensorValue.toDouble()
 
             // (2) No anchor yet (fresh install, corruption recovery, or voided radioactive baseline):
             // anchor here with zero credit.
             if (anchorCounter.isNaN()) {
-                anchorHere(v, elapsedMs)
+                anchorHere(v, elapsedMs, wallMs)
                 Log.d(TAG, "Anchored (zero credit) at $v (boot=$thisBootId)")
                 return
             }
@@ -316,7 +407,7 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             // (3) Defensive in-process boot/device change (recoverOnStart normally handles this).
             if (anchorBootId.isNotEmpty() && anchorBootId != thisBootId) {
                 Log.w(TAG, "boot/device changed in-process ($anchorBootId -> $thisBootId); re-anchoring")
-                anchorHere(v, elapsedMs)
+                anchorHere(v, elapsedMs, wallMs)
                 return
             }
 
@@ -337,7 +428,7 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
                 clearQuarantine()
                 coroutineScope.launch(dbDispatcher) {
                     flushLocked()
-                    anchorToLocked(v, elapsedMs)
+                    anchorToLocked(v, elapsedMs, wallMs)
                 }
                 stepCountChannel?.invokeMethod("onSensorChanged", null)
                 return
@@ -356,10 +447,11 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             }
 
             // (5) Plausible: accept. Advancing lastEventCounter increases derived unflushed; the flush
-            // books it and advances the anchor transactionally.
+            // books it (attributed to [anchorWall, lastEventWall]) and advances the anchor transactionally.
             clearQuarantine()
             lastEventCounter = v
             lastEventElapsedMs = elapsedMs
+            lastEventWallMs = wallMs
             if (unflushed() >= FLUSH_STEP_THRESHOLD) {
                 coroutineScope.launch(dbDispatcher) { flushLocked() }
             }
@@ -399,20 +491,21 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             (elapsedMs - quarantineFirstElapsedMs) >= QUARANTINE_CONFIRM_MS) {
             Log.w(TAG, "quarantine confirmed; re-anchoring to $sensorValue with zero credit")
             clearQuarantine()
-            anchorHere(sensorValue.toDouble(), elapsedMs)
+            anchorHere(sensorValue.toDouble(), elapsedMs, TimeStampUtils.getCurrentUtcTimestamp())
         }
     }
 
     /** Set the anchor to [v] with zero credit (sensor thread): update the mirror now, persist async. */
-    private fun anchorHere(v: Double, elapsedMs: Long) {
+    private fun anchorHere(v: Double, elapsedMs: Long, wallMs: Long) {
         anchorCounter = v
         anchorElapsedMs = elapsedMs
-        anchorWallMs = TimeStampUtils.getCurrentUtcTimestamp()
+        anchorWallMs = wallMs
         anchorBootId = thisBootId
         lastEventCounter = v
         lastEventElapsedMs = elapsedMs
+        lastEventWallMs = wallMs
         clearQuarantine()
-        coroutineScope.launch(dbDispatcher) { anchorToLocked(v, elapsedMs) }
+        coroutineScope.launch(dbDispatcher) { anchorToLocked(v, elapsedMs, wallMs) }
         stepCountChannel?.invokeMethod("onSensorChanged", null)
     }
 
@@ -428,9 +521,11 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     }
 
     /**
-     * Book the derived credit (lastEventCounter - anchorCounter) by inserting rows and advancing the
-     * anchor in one transaction. Runs only on dbDispatcher (single-flight). On failure the anchor is
-     * not advanced, so the credit stays derivable and is retried on the next flush (EC-4/EC-6/EC-14).
+     * Book the derived credit (lastEventCounter - anchorCounter) as interval rows and advance the
+     * anchor in one transaction. Runs only on dbDispatcher (single-flight). The credit is attributed
+     * to the wall window [anchorWall, lastEventWall] and split at local midnights, so a catch-up after
+     * downtime is spread across the downtime instead of dumped at "now" (EC-7/EC-8). On failure the
+     * anchor is not advanced, so the credit stays derivable and is retried (EC-4/EC-6/EC-14).
      */
     private suspend fun flushLocked() = stateMutex.withLock {
         val last = lastEventCounter
@@ -439,22 +534,37 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         if (credit <= 0) return@withLock
 
         val now = TimeStampUtils.getCurrentUtcTimestamp()
-        val chunks = splitIntoRowChunks(credit, MAX_STEPS_PER_ROW)
+        val watermark = lastRowEndMs
+        // Attribution window: from the last flushed event's wall time to the latest event's wall time,
+        // clamped to be strictly after the watermark and not in the future.
+        val endWall = (if (lastEventWallMs > 0) lastEventWallMs else now).coerceAtMost(now + FUTURE_SLACK_MS)
+        var startWall = if (anchorWallMs in 1..endWall) anchorWallMs else endWall
+        startWall = startWall.coerceAtLeast(watermark + 1)
+        val safeStart = minOf(startWall, endWall.coerceAtLeast(watermark + 1))
+        val safeEnd = maxOf(safeStart, endWall.coerceAtLeast(watermark + 1))
+        val windowMs = safeEnd - safeStart
+        val source = if (windowMs > GAP_SOURCE_THRESHOLD_MS) "gap" else "live"
+        val flags = if (safeStart != startWall || endWall != lastEventWallMs) FLAG_CLOCK_CLAMPED else 0
+
+        val rows = splitAtMidnights(credit, safeStart, safeEnd, source, flags, ZoneId.systemDefault())
+        if (rows.isEmpty()) return@withLock
+        val lastEnd = rows.last().endTs
+
         val newAnchor = AnchorState(
             anchorCounter = last,
             anchorElapsedMs = lastEventElapsedMs,
-            anchorWallMs = now,
+            anchorWallMs = safeEnd,
             bootId = thisBootId,
-            lastRowEndMs = now
+            lastRowEndMs = lastEnd
         )
-        val ok = database.commitFlush(chunks, now, newAnchor)
+        val ok = database.commitFlush(rows, newAnchor)
         if (ok) {
             anchorCounter = last
             anchorElapsedMs = lastEventElapsedMs
-            anchorWallMs = now
+            anchorWallMs = safeEnd
             anchorBootId = thisBootId
-            lastRowEndMs = now
-            Log.d(TAG, "Flushed $credit steps at $now (UTC). anchor=$last")
+            lastRowEndMs = lastEnd
+            Log.d(TAG, "Flushed $credit steps as ${rows.size} row(s) [$safeStart..$safeEnd] source=$source anchor=$last")
             // Notification refresh is outside the transaction; a throw here cannot re-flush (EC-14).
             try {
                 onFlushSuccess()
@@ -467,28 +577,23 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     }
 
     /** Re-anchor to [v] with zero credit (dbDispatcher): persist the anchor, then mirror it. */
-    private suspend fun anchorToLocked(v: Double, elapsedMs: Long) = stateMutex.withLock {
-        val now = TimeStampUtils.getCurrentUtcTimestamp()
+    private suspend fun anchorToLocked(v: Double, elapsedMs: Long, wallMs: Long) = stateMutex.withLock {
         val newAnchor = AnchorState(
             anchorCounter = v,
             anchorElapsedMs = elapsedMs,
-            anchorWallMs = now,
+            anchorWallMs = wallMs,
             bootId = thisBootId,
             lastRowEndMs = maxOf(lastRowEndMs, 0L)
         )
-        if (database.setAnchor(newAnchor)) {
-            anchorCounter = v
-            anchorElapsedMs = elapsedMs
-            anchorWallMs = now
-            anchorBootId = thisBootId
-            lastEventCounter = v
-            lastEventElapsedMs = elapsedMs
-        } else {
-            Log.e(TAG, "anchorTo failed to persist; keeping in-memory mirror ($v)")
-            anchorCounter = v
-            lastEventCounter = v
-            lastEventElapsedMs = elapsedMs
-        }
+        val persisted = database.setAnchor(newAnchor)
+        if (!persisted) Log.e(TAG, "anchorTo failed to persist; keeping in-memory mirror ($v)")
+        anchorCounter = v
+        anchorElapsedMs = elapsedMs
+        anchorWallMs = wallMs
+        anchorBootId = thisBootId
+        lastEventCounter = v
+        lastEventElapsedMs = elapsedMs
+        lastEventWallMs = wallMs
     }
 
     fun runWalCheckpointForExport(): Boolean = database.runWalCheckpointFull()

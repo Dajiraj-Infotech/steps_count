@@ -2,6 +2,7 @@ package com.dajiraj.steps_count
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
@@ -27,6 +28,22 @@ data class AnchorState(
 )
 
 /**
+ * One step interval to persist (Phase 3). Steps happened between [startTs] and [endTs] (UTC ms);
+ * [endTs] is stored in the legacy `timestamp` column so existing readers keep working.
+ *
+ * @param source "live" (attributed to real event times), "gap"/"boot_gap" (a recovered downtime
+ *   window, spread across the interval), or "legacy" (a pre-Phase-3 point row).
+ * @param flags bit 1 = CLOCK_CLAMPED (timestamp adjusted for a clock change), bit 2 = LOW_ACCURACY.
+ */
+data class StepRow(
+    val stepCount: Int,
+    val startTs: Long,
+    val endTs: Long,
+    val source: String,
+    val flags: Int
+)
+
+/**
  * SQLite database helper for storing step count data.
  *
  * Schema history:
@@ -35,6 +52,8 @@ data class AnchorState(
  *      (aligned with Google Health Connect and Apple HealthKit UUID identifiers)
  *  v3: adds tracker_state (single-row durable anchor) so steps and the anchor advance in one
  *      transaction (exactly-once accounting). WAL enabled.
+ *  v4: adds interval columns to steps (start_timestamp, source, flags) so a row records the window
+ *      the steps happened in, not just the flush instant.
  *
  * Use [getInstance] to obtain the process-wide singleton; it is never closed, which removes the
  * close/reopen/straggler-flush race entirely (EC-40).
@@ -45,13 +64,16 @@ class StepCountDatabase(context: Context) :
     companion object {
         private const val TAG = "StepCountDatabase"
         const val DATABASE_NAME = "step_count.db"
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
 
         // Table and column names
         private const val TABLE_STEPS = "steps"
         private const val COLUMN_UUID = "uuid"
         private const val COLUMN_STEP_COUNT = "step_count"
-        private const val COLUMN_TIMESTAMP = "timestamp"
+        private const val COLUMN_TIMESTAMP = "timestamp"          // interval END (legacy name kept)
+        private const val COLUMN_START_TIMESTAMP = "start_timestamp"
+        private const val COLUMN_SOURCE = "source"
+        private const val COLUMN_FLAGS = "flags"
 
         // Tracker-state table (single row, id = 1): the durable anchor.
         private const val TABLE_TRACKER = "tracker_state"
@@ -67,7 +89,10 @@ class StepCountDatabase(context: Context) :
             CREATE TABLE $TABLE_STEPS (
                 $COLUMN_UUID TEXT PRIMARY KEY,
                 $COLUMN_STEP_COUNT INTEGER NOT NULL,
-                $COLUMN_TIMESTAMP INTEGER NOT NULL
+                $COLUMN_TIMESTAMP INTEGER NOT NULL,
+                $COLUMN_START_TIMESTAMP INTEGER NOT NULL DEFAULT 0,
+                $COLUMN_SOURCE TEXT NOT NULL DEFAULT 'live',
+                $COLUMN_FLAGS INTEGER NOT NULL DEFAULT 0
             )
         """
 
@@ -124,6 +149,17 @@ class StepCountDatabase(context: Context) :
         Log.d(TAG, "Upgrading database from v$oldVersion to v$newVersion")
         if (oldVersion < 2) migrateV1ToV2(db)
         if (oldVersion < 3) migrateV2ToV3(db)
+        if (oldVersion < 4) migrateV3ToV4(db)
+    }
+
+    /** v3 -> v4: add interval columns to steps; existing point rows become zero-width 'legacy' rows. */
+    private fun migrateV3ToV4(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE $TABLE_STEPS ADD COLUMN $COLUMN_START_TIMESTAMP INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE $TABLE_STEPS ADD COLUMN $COLUMN_SOURCE TEXT NOT NULL DEFAULT 'legacy'")
+        db.execSQL("ALTER TABLE $TABLE_STEPS ADD COLUMN $COLUMN_FLAGS INTEGER NOT NULL DEFAULT 0")
+        // Backfill: an old point row is a zero-width interval ending (and starting) at its timestamp.
+        db.execSQL("UPDATE $TABLE_STEPS SET $COLUMN_START_TIMESTAMP = $COLUMN_TIMESTAMP WHERE $COLUMN_START_TIMESTAMP = 0")
+        Log.d(TAG, "Migration v3->v4 complete: interval columns added")
     }
 
     override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -151,6 +187,20 @@ class StepCountDatabase(context: Context) :
         db.insertWithOnConflict(TABLE_TRACKER, null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
+    // Timeline column order for [cursorRowToMap]. `source`/`flags` are additive (readers may ignore).
+    private val TIMELINE_PROJECTION = arrayOf(
+        COLUMN_UUID, COLUMN_STEP_COUNT, COLUMN_TIMESTAMP, COLUMN_START_TIMESTAMP, COLUMN_SOURCE, COLUMN_FLAGS
+    )
+
+    private fun cursorRowToMap(c: Cursor): Map<String, Any> = mapOf(
+        "uuid" to c.getString(0),
+        "step_count" to c.getInt(1),
+        "timestamp" to c.getLong(2),          // interval end (legacy key)
+        "start_timestamp" to c.getLong(3),
+        "source" to (c.getString(4) ?: "live"),
+        "flags" to c.getInt(5)
+    )
+
     /**
      * Migration v1 → v2:
      * Replaces INTEGER AUTOINCREMENT `id` column with TEXT `uuid` PRIMARY KEY.
@@ -163,8 +213,17 @@ class StepCountDatabase(context: Context) :
         // 1. Rename old table
         db.execSQL("ALTER TABLE $TABLE_STEPS RENAME TO ${TABLE_STEPS}_old")
 
-        // 2. Create new table with uuid TEXT PRIMARY KEY
-        db.execSQL(CREATE_TABLE_STEPS)
+        // 2. Create the ERA-CORRECT v2 table (3 columns). It must NOT include the v4 interval columns,
+        //    or the later v3->v4 ALTER ADD COLUMN would fail with "duplicate column" on a v1->v4 upgrade.
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_STEPS (
+                $COLUMN_UUID TEXT PRIMARY KEY,
+                $COLUMN_STEP_COUNT INTEGER NOT NULL,
+                $COLUMN_TIMESTAMP INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
 
         // 3. Copy existing rows, generating a UUID for each via SQLite's randomblob.
         //    Format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx  (RFC 4122 v4 shape)
@@ -273,26 +332,28 @@ class StepCountDatabase(context: Context) :
     }
 
     /**
-     * Insert [chunks] step rows (each stamped [timestamp]) AND advance the anchor to [anchor] in ONE
-     * transaction. Either all rows plus the anchor commit, or nothing does. This is the exactly-once
-     * guarantee: the anchor never advances past steps that were not durably written, and never lags
-     * behind steps that were (EC-4/EC-5/EC-6/EC-12/EC-14). On failure the caller keeps the derived
-     * credit (lastEventCounter - anchor) and retries on the next flush.
+     * Insert [rows] step intervals AND advance the anchor to [anchor] in ONE transaction. Either all
+     * rows plus the anchor commit, or nothing does. This is the exactly-once guarantee: the anchor
+     * never advances past steps that were not durably written, and never lags behind steps that were
+     * (EC-4/EC-5/EC-6/EC-12/EC-14). On failure the caller keeps the derived credit and retries.
      *
      * @return true on commit, false on any failure (rolled back).
      */
-    fun commitFlush(chunks: List<Int>, timestamp: Long, anchor: AnchorState): Boolean {
-        if (chunks.all { it <= 0 }) return setAnchor(anchor)
+    fun commitFlush(rows: List<StepRow>, anchor: AnchorState): Boolean {
+        if (rows.all { it.stepCount <= 0 }) return setAnchor(anchor)
         return try {
             val db = writableDatabase
             db.beginTransactionNonExclusive()
             try {
-                for (chunk in chunks) {
-                    if (chunk <= 0) continue
+                for (r in rows) {
+                    if (r.stepCount <= 0) continue
                     val values = ContentValues().apply {
                         put(COLUMN_UUID, UUID.randomUUID().toString())
-                        put(COLUMN_STEP_COUNT, chunk)
-                        put(COLUMN_TIMESTAMP, timestamp)
+                        put(COLUMN_STEP_COUNT, r.stepCount)
+                        put(COLUMN_TIMESTAMP, r.endTs)
+                        put(COLUMN_START_TIMESTAMP, r.startTs)
+                        put(COLUMN_SOURCE, r.source)
+                        put(COLUMN_FLAGS, r.flags)
                     }
                     if (db.insert(TABLE_STEPS, null, values) == -1L) {
                         throw IllegalStateException("step insert returned -1")
@@ -389,30 +450,12 @@ class StepCountDatabase(context: Context) :
             val timelineData = mutableListOf<Map<String, Any>>()
             val (selection, selectionArgs) = buildDateQuery(startDate, endDate)
 
-            val cursor = db.query(
-                TABLE_STEPS,
-                arrayOf(COLUMN_UUID, COLUMN_STEP_COUNT, COLUMN_TIMESTAMP),
-                selection,
-                selectionArgs,
-                null,
-                null,
+            db.query(
+                TABLE_STEPS, TIMELINE_PROJECTION, selection, selectionArgs, null, null,
                 "$COLUMN_TIMESTAMP ASC"
-            )
-
-            while (cursor.moveToNext()) {
-                val uuid = cursor.getString(0)
-                val stepCount = cursor.getInt(1)
-                val timestamp = cursor.getLong(2)
-
-                timelineData.add(
-                    mapOf(
-                        "uuid" to uuid,
-                        "step_count" to stepCount,
-                        "timestamp" to timestamp
-                    )
-                )
+            ).use { cursor ->
+                while (cursor.moveToNext()) timelineData.add(cursorRowToMap(cursor))
             }
-            cursor.close()
 
             Log.d(TAG, "Timeline query: ${timelineData.size} entries (start: $startDate, end: $endDate)")
             timelineData
@@ -434,30 +477,12 @@ class StepCountDatabase(context: Context) :
             val db = readableDatabase
             val timelineData = mutableListOf<Map<String, Any>>()
 
-            val cursor = db.query(
-                TABLE_STEPS,
-                arrayOf(COLUMN_UUID, COLUMN_STEP_COUNT, COLUMN_TIMESTAMP),
-                "$COLUMN_TIMESTAMP > ?",
-                arrayOf(afterTimestamp.toString()),
-                null,
-                null,
-                "$COLUMN_TIMESTAMP ASC"
-            )
-
-            while (cursor.moveToNext()) {
-                val uuid = cursor.getString(0)
-                val stepCount = cursor.getInt(1)
-                val timestamp = cursor.getLong(2)
-
-                timelineData.add(
-                    mapOf(
-                        "uuid" to uuid,
-                        "step_count" to stepCount,
-                        "timestamp" to timestamp
-                    )
-                )
+            db.query(
+                TABLE_STEPS, TIMELINE_PROJECTION, "$COLUMN_TIMESTAMP > ?",
+                arrayOf(afterTimestamp.toString()), null, null, "$COLUMN_TIMESTAMP ASC"
+            ).use { cursor ->
+                while (cursor.moveToNext()) timelineData.add(cursorRowToMap(cursor))
             }
-            cursor.close()
 
             Log.d(TAG, "Timeline-after query: ${timelineData.size} entries after $afterTimestamp")
             timelineData

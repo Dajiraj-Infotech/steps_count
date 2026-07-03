@@ -1,5 +1,7 @@
 package com.dajiraj.steps_count
 
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -132,6 +134,67 @@ internal class StepCountManagerTest {
         for (credit in longArrayOf(1, 49, 50_000, 50_001, 123_456, 1_000_000)) {
             val sum = StepCountManager.splitIntoRowChunks(credit, 50_000).sumOf { it.toLong() }
             assertEquals(credit, sum, "chunk sum must equal credit ($credit)")
+        }
+    }
+
+    // ---- Time attribution: splitAtMidnights (Phase 3) ------------------------------------------
+
+    private val utc = ZoneId.of("UTC")
+    private fun utcMs(y: Int, mo: Int, d: Int, h: Int, mi: Int): Long =
+        ZonedDateTime.of(y, mo, d, h, mi, 0, 0, utc).toInstant().toEpochMilli()
+
+    @Test
+    fun splitAtMidnights_singleDayIsOneRow() {
+        val start = utcMs(2021, 6, 1, 9, 0)
+        val end = utcMs(2021, 6, 1, 10, 0)
+        val rows = StepCountManager.splitAtMidnights(600, start, end, "live", 0, utc)
+        assertEquals(1, rows.size)
+        assertEquals(600, rows[0].stepCount)
+        assertEquals(start, rows[0].startTs)
+        assertEquals(end, rows[0].endTs)
+    }
+
+    @Test
+    fun splitAtMidnights_zeroWidthWindowIsOneRow() {
+        val t = utcMs(2021, 6, 1, 9, 0)
+        val rows = StepCountManager.splitAtMidnights(42, t, t, "live", 0, utc)
+        assertEquals(1, rows.size)
+        assertEquals(42, rows[0].stepCount)
+        assertEquals(t, rows[0].startTs)
+        assertEquals(t, rows[0].endTs)
+    }
+
+    @Test
+    fun splitAtMidnights_splitsAtMidnightAndApportionsByDuration() {
+        // 22:00 day1 to 02:00 day2 = 4h; midnight splits it 2h/2h, so 1000 -> 500/500.
+        val start = utcMs(2021, 6, 1, 22, 0)
+        val midnight = utcMs(2021, 6, 2, 0, 0)
+        val end = utcMs(2021, 6, 2, 2, 0)
+        val rows = StepCountManager.splitAtMidnights(1000, start, end, "gap", 0, utc)
+        assertEquals(2, rows.size)
+        assertEquals(1000, rows.sumOf { it.stepCount })      // exactly-once preserved
+        assertEquals(500, rows[0].stepCount)
+        assertEquals(500, rows[1].stepCount)
+        assertEquals(start, rows[0].startTs)
+        assertEquals(midnight - 1, rows[0].endTs)            // first row ends 1ms before midnight
+        assertEquals(midnight, rows[1].startTs)              // second row starts at midnight
+        assertEquals(end, rows[1].endTs)
+    }
+
+    @Test
+    fun splitAtMidnights_sumAlwaysEqualsStepsAcrossManyDays() {
+        // A 10-day catch-up window with an awkward step count: every row-set must still sum exactly.
+        val start = utcMs(2021, 1, 1, 5, 30)
+        val end = utcMs(2021, 1, 11, 18, 15)
+        for (steps in longArrayOf(1, 7, 9999, 42_123, 1_000_001)) {
+            val rows = StepCountManager.splitAtMidnights(steps, start, end, "gap", 0, utc)
+            assertEquals(steps, rows.sumOf { it.stepCount.toLong() }, "sum must equal steps ($steps)")
+            // No row crosses a midnight, so day queries are exact: each row's start/end share a local day.
+            for (r in rows) {
+                val startDay = ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(r.startTs), utc).toLocalDate()
+                val endDay = ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(r.endTs), utc).toLocalDate()
+                assertEquals(startDay, endDay, "row must not cross a day boundary")
+            }
         }
     }
 }

@@ -21,6 +21,9 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         private const val CHANNEL_ID = "steps_count_channel"
         private const val CHANNEL_NAME = "Steps Count Service"
 
+        /** Hardware FIFO batching window (5 min) so the SoC is not woken for every step (EC-8). */
+        private const val MAX_REPORT_LATENCY_US = 5 * 60 * 1_000_000
+
         // Service state
         private var isRunning = false
         private var serviceInstance: BackgroundServiceManager? = null
@@ -95,9 +98,12 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
     private fun initializeSensors() {
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
-        stepCounterSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        // Prefer the wake-up step counter so the SoC is woken to deliver batches (EC-8); fall back to
+        // the default (non-wake-up) variant, whose FIFO still preserves per-event timestamps.
+        stepCounterSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, true)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
 
-        Log.d(TAG, "Step counter sensor available: ${stepCounterSensor != null}")
+        Log.d(TAG, "Step counter sensor available: ${stepCounterSensor != null} (wakeup=${stepCounterSensor?.isWakeUpSensor})")
     }
 
     private fun initializeStepManager() {
@@ -133,8 +139,11 @@ class BackgroundServiceManager : Service(), SensorEventListener {
 
     private fun registerSensor() {
         stepCounterSensor?.let { sensor ->
+            // maxReportLatencyUs enables hardware FIFO batching: while the SoC sleeps, the sensor hub
+            // buffers events (each keeping its true timestamp) and delivers them on wake, which is both
+            // battery-friendly and lets the manager attribute steps to when they happened (EC-8).
             val success = sensorManager.registerListener(
-                this, sensor, SensorManager.SENSOR_DELAY_NORMAL
+                this, sensor, SensorManager.SENSOR_DELAY_NORMAL, MAX_REPORT_LATENCY_US
             )
             if (success) {
                 Log.d(
