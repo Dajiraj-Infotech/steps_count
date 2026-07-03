@@ -201,9 +201,14 @@ class StepsCountPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 return
             }
 
-            // Get the database file path
+            // Get the database file path. Phase 4 moved the DB into device-protected storage, so read
+            // it from there; fall back to the legacy credential-encrypted path for un-migrated installs.
             val dbName = "step_count.db"
-            val dbFile = context.getDatabasePath(dbName)
+            val dpsContext = context.createDeviceProtectedStorageContext()
+            var dbFile = dpsContext.getDatabasePath(dbName)
+            if (!dbFile.exists()) {
+                dbFile = context.getDatabasePath(dbName)
+            }
 
             if (!dbFile.exists()) {
                 result.error("DATABASE_NOT_FOUND", "Steps database (step_count.db) not found", null)

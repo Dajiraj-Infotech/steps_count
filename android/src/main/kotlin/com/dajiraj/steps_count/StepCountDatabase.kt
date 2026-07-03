@@ -3,10 +3,33 @@ package com.dajiraj.steps_count
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
+import java.io.File
 import java.util.UUID
+
+/**
+ * On corruption, RENAME the database file instead of deleting it (which the default handler does),
+ * so the data is recoverable for forensics and the loss is visible rather than silent (EC-21). A
+ * fresh empty DB is then created; its anchor is null, so the first sensor event re-anchors cleanly.
+ */
+private class RenameOnCorruptionHandler : DatabaseErrorHandler {
+    override fun onCorruption(db: SQLiteDatabase) {
+        val path = db.path
+        try {
+            db.close()
+        } catch (_: Exception) {
+        }
+        if (path != null) {
+            val src = File(path)
+            val dest = File("$path.corrupt-${System.currentTimeMillis()}")
+            val renamed = runCatching { src.renameTo(dest) }.getOrDefault(false)
+            Log.e("StepCountDatabase", "db_corrupt: renamed to ${dest.name} (ok=$renamed)")
+        }
+    }
+}
 
 /**
  * Durable anchor recovered from the DB on start (Phase 2). The hardware cumulative counter is the
@@ -59,7 +82,7 @@ data class StepRow(
  * close/reopen/straggler-flush race entirely (EC-40).
  */
 class StepCountDatabase(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION) {
+    SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION, RenameOnCorruptionHandler()) {
 
     companion object {
         private const val TAG = "StepCountDatabase"

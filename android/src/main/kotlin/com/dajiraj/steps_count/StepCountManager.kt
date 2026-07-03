@@ -45,7 +45,11 @@ import kotlin.math.roundToInt
  * credential-encrypted (device-protected storage + direct boot is Phase 4). See
  * docs/robust_step_counting_spec.md.
  */
-class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit = {}) {
+class StepCountManager(
+    context: Context,
+    private val onFlushSuccess: () -> Unit = {},
+    private val onSensorStalled: () -> Unit = {}
+) {
     companion object {
         private const val TAG = "StepCountManager"
         private const val PREFS_NAME = "steps_count_prefs"
@@ -55,6 +59,9 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         private const val KEY_PENDING_STEPS = "pending_steps"
         private const val KEY_BOOT_ID = "boot_id"
         private const val KEY_MIGRATED_TO_ANCHOR = "migrated_to_anchor_v2"
+        // Device-protected-storage flags (config only; never counting state).
+        private const val FLAGS_PREFS = "steps_count_flags"
+        private const val KEY_MOVED_TO_DPS = "moved_to_dps"
 
         // Flush thresholds
         private const val FLUSH_STEP_THRESHOLD = 50
@@ -102,6 +109,9 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         private const val FUTURE_SLACK_MS = 2_000L
         /** A flush window wider than this is a recovered gap, marked 'gap' and spread over the window. */
         private const val GAP_SOURCE_THRESHOLD_MS = 300_000L // 5 min
+
+        /** No forward PROGRESS (accepted positive delta) for this long triggers a sensor re-register. */
+        private const val WATCHDOG_SILENCE_MS = 6 * 60 * 60 * 1000L // 6 hours
 
         // Row flags.
         const val FLAG_CLOCK_CLAMPED = 1
@@ -206,10 +216,12 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         }
     }
 
-    // Never-closed process singleton (EC-40). Phase 4 will pass a device-protected-storage context.
-    private val database = StepCountDatabase.getInstance(context)
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    // Device-protected storage: readable before first unlock (direct boot, EC-29) and excluded from
+    // Auto Backup (EC-2). The DB and prefs are moved here once, then always accessed via this context.
+    private val appContext: Context = context.applicationContext
+    private val dpsContext: Context = appContext.createDeviceProtectedStorageContext()
+    private val database: StepCountDatabase
+    private val prefs: SharedPreferences
 
     // H2: SupervisorJob so a failing child coroutine does not cancel the flush loop.
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -235,6 +247,11 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     @Volatile private var lastEventElapsedMs: Long = -1L
     // Wall-clock time attributed to the last accepted event (Phase 3); the end of the next flush window.
     @Volatile private var lastEventWallMs: Long = 0L
+    // Watchdog clock (EC-38): advanced ONLY by accepted positive deltas, so a frozen-but-delivering hub
+    // (zero-delta heartbeats) cannot suppress the silence watchdog.
+    @Volatile private var lastProgressElapsed: Long = -1L
+    @Volatile private var sawZeroDeltaSinceProgress = false
+    @Volatile private var lastWatchdogFireElapsed: Long = 0L
 
     // Quarantine state for implausible deltas (EC-3): read/written only on the sensor thread.
     private var quarantineActive = false
@@ -247,6 +264,20 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
     private var flushJob: Job? = null
 
     init {
+        // Move the DB + prefs into device-protected storage once (idempotent, guarded by a flag).
+        val flags = dpsContext.getSharedPreferences(FLAGS_PREFS, Context.MODE_PRIVATE)
+        if (!flags.getBoolean(KEY_MOVED_TO_DPS, false)) {
+            try {
+                dpsContext.moveDatabaseFrom(appContext, StepCountDatabase.DATABASE_NAME)
+                dpsContext.moveSharedPreferencesFrom(appContext, PREFS_NAME)
+                Log.d(TAG, "Moved DB + prefs to device-protected storage")
+            } catch (e: Exception) {
+                Log.e(TAG, "DPS move failed (continuing on default storage): ${e.message}")
+            }
+            flags.edit().putBoolean(KEY_MOVED_TO_DPS, true).apply()
+        }
+        database = StepCountDatabase.getInstance(dpsContext)
+        prefs = dpsContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         recoverOnStart()
         startPeriodicFlush()
     }
@@ -416,7 +447,10 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             val delta = (v - ref).roundToInt()
 
             if (delta == 0) {
-                stepCountChannel?.invokeMethod("onSensorChanged", null) // heartbeat (EC-51)
+                // Heartbeat / frozen-hub re-emission (EC-51): does NOT advance the watchdog progress
+                // clock, so a hub stuck at one value still trips the silence watchdog (EC-38).
+                sawZeroDeltaSinceProgress = true
+                stepCountChannel?.invokeMethod("onSensorChanged", null)
                 return
             }
 
@@ -452,6 +486,8 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             lastEventCounter = v
             lastEventElapsedMs = elapsedMs
             lastEventWallMs = wallMs
+            lastProgressElapsed = nowElapsed          // EC-38: real progress resets the silence watchdog
+            sawZeroDeltaSinceProgress = false
             if (unflushed() >= FLUSH_STEP_THRESHOLD) {
                 coroutineScope.launch(dbDispatcher) { flushLocked() }
             }
@@ -504,6 +540,8 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
         lastEventCounter = v
         lastEventElapsedMs = elapsedMs
         lastEventWallMs = wallMs
+        lastProgressElapsed = SystemClock.elapsedRealtime() // start the silence watchdog clock
+        sawZeroDeltaSinceProgress = false
         clearQuarantine()
         coroutineScope.launch(dbDispatcher) { anchorToLocked(v, elapsedMs, wallMs) }
         stepCountChannel?.invokeMethod("onSensorChanged", null)
@@ -516,7 +554,29 @@ class StepCountManager(context: Context, private val onFlushSuccess: () -> Unit 
             while (true) {
                 delay(FLUSH_INTERVAL_MS)
                 flushLocked()
+                checkSensorWatchdog()
             }
+        }
+    }
+
+    /**
+     * If there has been no forward progress for WATCHDOG_SILENCE_MS while we are anchored, the sensor
+     * connection may have been torn down (OEM policy) or the hub may be frozen-but-delivering. Ask the
+     * service to re-register the listener. Debounced so it fires at most once per silence window; a
+     * genuinely idle user (sleep) just pays a cheap idempotent re-register (EC-19/EC-38).
+     */
+    private fun checkSensorWatchdog() {
+        if (lastProgressElapsed < 0 || anchorCounter.isNaN()) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastProgressElapsed <= WATCHDOG_SILENCE_MS) return
+        if (now - lastWatchdogFireElapsed <= WATCHDOG_SILENCE_MS) return
+        lastWatchdogFireElapsed = now
+        Log.w(TAG, "sensor_watchdog: no progress for ${now - lastProgressElapsed}ms " +
+                   "(frozen_suspect=$sawZeroDeltaSinceProgress); re-registering")
+        try {
+            onSensorStalled()
+        } catch (e: Exception) {
+            Log.e(TAG, "onSensorStalled failed: ${e.message}")
         }
     }
 

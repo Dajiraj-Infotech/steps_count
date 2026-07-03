@@ -3,6 +3,7 @@ package com.dajiraj.steps_count
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -10,6 +11,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -24,60 +26,121 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         /** Hardware FIFO batching window (5 min) so the SoC is not woken for every step (EC-8). */
         private const val MAX_REPORT_LATENCY_US = 5 * 60 * 1_000_000
 
+        // Device-protected-storage flags so the boot receiver can read them before first unlock.
+        private const val FLAGS_PREFS = "steps_count_flags"
+        private const val KEY_TRACKING_ENABLED = "tracking_enabled"
+        private const val RESTART_ALARM_ID = 42
+
         // Service state
         private var isRunning = false
         private var serviceInstance: BackgroundServiceManager? = null
 
-        // Single shared instance – null when the service is not running
+        // Single shared instance; null when the service is not running.
         @Volatile
         var stepCountManager: StepCountManager? = null
             private set
 
-        // Public methods
         fun isServiceRunning(): Boolean = isRunning
 
+        private fun flagsPrefs(context: Context) =
+            context.applicationContext.createDeviceProtectedStorageContext()
+                .getSharedPreferences(FLAGS_PREFS, Context.MODE_PRIVATE)
+
+        /**
+         * Whether the user wants tracking on. Defaults to false so the boot receiver does not resurrect
+         * tracking the user never enabled; the first startBackgroundService() sets it true (EC-42).
+         */
+        fun isTrackingEnabled(context: Context): Boolean =
+            flagsPrefs(context).getBoolean(KEY_TRACKING_ENABLED, false)
+
+        fun setTrackingEnabled(context: Context, enabled: Boolean) {
+            flagsPrefs(context).edit().putBoolean(KEY_TRACKING_ENABLED, enabled).apply()
+        }
+
+        /** ACTIVITY_RECOGNITION is a runtime permission on API 29+; without it the sensor is silent. */
+        fun hasActivityRecognitionPermission(context: Context): Boolean =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.checkSelfPermission(android.Manifest.permission.ACTIVITY_RECOGNITION) ==
+                    PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+
         fun stopBackgroundService(context: Context) {
+            setTrackingEnabled(context, false)
             val intent = Intent(context, BackgroundServiceManager::class.java).apply {
                 action = "FORCE_STOP"
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (e: Exception) {
+                // Service already dead / cannot start from background: the flag alone stops any restart.
+                Log.w(TAG, "stopBackgroundService: ${e.message}")
+            }
+        }
+
+        /** Best-effort restart via AlarmManager (survives process death). Honors Android 12+ limits. */
+        fun scheduleRestart(context: Context, delayMs: Long) {
+            try {
+                val intent = Intent(context, BackgroundServiceManager::class.java).apply {
+                    action = "START_SERVICE"
+                }
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                val pi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    PendingIntent.getForegroundService(context, RESTART_ALARM_ID, intent, flags)
+                } else {
+                    PendingIntent.getService(context, RESTART_ALARM_ID, intent, flags)
+                }
+                val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                am.set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + delayMs, pi)
+                Log.d(TAG, "Restart alarm scheduled in ${delayMs}ms")
+            } catch (e: Exception) {
+                Log.e(TAG, "scheduleRestart failed: ${e.message}")
+            }
         }
     }
 
     private lateinit var sensorManager: SensorManager
     private var stepCounterSensor: Sensor? = null
     private lateinit var serviceScope: CoroutineScope
-
-    // H5: guard to prevent double-cleanup on interleaved stopService() + onDestroy() calls
-    private var cleanupDone = false
+    private var isSensorRegistered = false
 
     override fun onCreate() {
         super.onCreate()
         serviceInstance = this
         createNotificationChannel()
         initializeSensors()
-        initializeStepManager()
         serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            "START_SERVICE" -> {
-                startService()
-            }
-
-            "FORCE_STOP" -> {
-                stopService()
-            }
-
-            else -> {
-                // Default action - start the service
-                startService()
-            }
+        // Explicit stop: never enters the foreground, cannot fabricate a start (EC-58).
+        if (intent?.action == "FORCE_STOP") {
+            stopTracking()
+            return START_NOT_STICKY
         }
 
-        // START_REDELIVER_INTENT ensures the service is restarted with the last intent if killed
-        return START_REDELIVER_INTENT
+        if (intent?.action == "START_SERVICE") {
+            setTrackingEnabled(applicationContext, true)
+        } else if (!isTrackingEnabled(applicationContext)) {
+            // Redelivered/implicit restart while the user has tracking off: do not resurrect (EC-42).
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // Prepare the manager first so the notification shows a real count, then honor the
+        // startForegroundService contract on EVERY start command before any early return (EC-20).
+        ensureManager()
+        if (!startForegroundSafely()) {
+            // API 34+ health FGS without ACTIVITY_RECOGNITION throws SecurityException; other
+            // background-start limits throw too. Stop cleanly instead of crash-looping (EC-18).
+            Log.e(TAG, "Could not enter foreground; stopping without restart")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        startTracking()
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -106,35 +169,58 @@ class BackgroundServiceManager : Service(), SensorEventListener {
         Log.d(TAG, "Step counter sensor available: ${stepCounterSensor != null} (wakeup=${stepCounterSensor?.isWakeUpSensor})")
     }
 
-    private fun initializeStepManager() {
-        try {
-            // H3: write directly to companion; no redundant local field
-            Companion.stepCountManager = StepCountManager(
-                context = this.applicationContext,
-                onFlushSuccess = { updateNotification() }  // M1: notification on each flush
-            )
-            Log.d(TAG, "Step count manager initialized")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize step count manager: ${e.message}")
+    /** (Re)create the shared manager if absent. Idempotent; retried on every start command (EC-15/16). */
+    private fun ensureManager() {
+        if (Companion.stepCountManager == null) {
+            try {
+                Companion.stepCountManager = StepCountManager(
+                    context = applicationContext,
+                    onFlushSuccess = { updateNotification() },     // M1: notification on each flush
+                    onSensorStalled = { reregisterSensor() }       // EC-38: re-attach a torn/frozen sensor
+                )
+                Log.d(TAG, "Step count manager initialized")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize step count manager: ${e.message}")
+            }
         }
     }
 
-    private fun startService() {
-        if (isRunning) return
-        isRunning = true
-
+    /** Re-attach the sensor listener (EC-19/EC-38). Safe from any thread; registerListener is thread-safe. */
+    private fun reregisterSensor() {
+        if (isSensorRegistered) unregisterSensor()
         registerSensor()
-        startForegroundService()
-        updateNotification() // initial notification with current step count
-
-        Log.d(TAG, "Service started successfully")
     }
 
-    private fun stopService() {
+    private fun startTracking() {
+        if (!isSensorRegistered) registerSensor()
+        isRunning = true
+        if (!hasActivityRecognitionPermission(applicationContext)) {
+            Log.w(TAG, "ACTIVITY_RECOGNITION not granted; the sensor will deliver no events (EC-17)")
+        }
+        updateNotification()
+        Log.d(TAG, "Tracking started (sensorRegistered=$isSensorRegistered)")
+    }
+
+    private fun stopTracking() {
         doCleanup()
-        serviceScope.cancel()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /** Enter the foreground, returning false (instead of crashing) if the platform refuses (EC-18). */
+    private fun startForegroundSafely(): Boolean {
+        return try {
+            val notification = createInitialNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed: ${e.message}")
+            false
+        }
     }
 
     private fun registerSensor() {
@@ -145,38 +231,16 @@ class BackgroundServiceManager : Service(), SensorEventListener {
             val success = sensorManager.registerListener(
                 this, sensor, SensorManager.SENSOR_DELAY_NORMAL, MAX_REPORT_LATENCY_US
             )
-            if (success) {
-                Log.d(
-                    TAG, "Step counter sensor registered"
-                )
-            } else {
-                Log.w(
-                    TAG, "Failed to register step counter sensor"
-                )
-            }
+            isSensorRegistered = success
+            if (success) Log.d(TAG, "Step counter sensor registered")
+            else Log.w(TAG, "Failed to register step counter sensor")
         }
     }
 
     private fun unregisterSensor() {
         sensorManager.unregisterListener(this)
+        isSensorRegistered = false
         Log.d(TAG, "Sensor unregistered")
-    }
-
-    private fun startForegroundService() {
-        try {
-            val notification = createInitialNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-            Log.d(TAG, "Foreground service started in onCreate")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start foreground service: ${e.message}", e)
-            // If we can't start foreground, stop the service
-            stopSelf()
-            return
-        }
     }
 
     private fun createInitialNotification(): Notification {
@@ -212,15 +276,17 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     }
 
 
-    // H5: centralised, guarded cleanup. Safe to call from both stopService() and onDestroy().
+    /**
+     * Centralised cleanup, safe to call from both stopTracking() and onDestroy(). Idempotent without a
+     * sticky guard (cleanup() on a null manager is a no-op), so a stop/start race cannot wedge isRunning
+     * in the "true but not really running" state the old guard could leave behind (EC-16).
+     */
     private fun doCleanup() {
-        if (cleanupDone) return
-        cleanupDone = true
         isRunning = false
-        serviceInstance = null
-        unregisterSensor()
+        if (isSensorRegistered) unregisterSensor()
         stepCountManager?.cleanup()
         Companion.stepCountManager = null
+        if (serviceInstance === this) serviceInstance = null
     }
 
     private fun updateNotification() {
@@ -246,14 +312,26 @@ class BackgroundServiceManager : Service(), SensorEventListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        // Handle accuracy changes if needed
+        // Accuracy transitions are logged by the manager via the event stream; nothing to do here.
+    }
+
+    /**
+     * The user swiped the app off the recents list, which kills the process on many OEMs. If tracking
+     * is still enabled, arm an alarm to bring the service back (best-effort; Android 12+ background
+     * foreground-service-start limits may still block it, EC-23/EC-41).
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (isTrackingEnabled(applicationContext)) {
+            scheduleRestart(applicationContext, 2_000L)
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "Service destroyed")
         doCleanup()
-        serviceScope.cancel()
+        if (::serviceScope.isInitialized) serviceScope.cancel()
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 }
